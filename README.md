@@ -1,4 +1,4 @@
-# MiniTube
+# SmartTube for Mac
 
 A native macOS YouTube front end. It plays the **real** `youtube.com` watch page in a
 cropped WebView (so playback, HDR, DRM, and captions are exactly YouTube's own), while every
@@ -6,7 +6,7 @@ other surface — recommendations, subscriptions, search, channels, Shorts, play
 history — is rendered as a native SwiftUI app personalized to **your** account. There is no
 Google Cloud project and no OAuth: it reuses the YouTube login you already have in Firefox.
 
-> **Not affiliated with YouTube or Google.** A personal project. See [Legal](#legal).
+> **Not affiliated with YouTube or Google** — nor with the [SmartTube](https://github.com/yuliskov/SmartTube) Android-TV client (unrelated project, similar name). A personal project. See [Legal](#legal).
 
 ## Features
 
@@ -29,7 +29,7 @@ Google Cloud project and no OAuth: it reuses the YouTube login you already have 
 
 - **Apple Silicon M3 or newer — required.** Apple removed VP9 decoding from WebKit, so
   YouTube's HDR/4K streams now arrive only as AV1, which only M3-and-newer chips can decode.
-  MiniTube checks for an AV1 hardware decoder at launch and, on older Macs, tells you why and
+  SmartTube for Mac checks for an AV1 hardware decoder at launch and, on older Macs, tells you why and
   exits (rather than degrade to 1080p SDR). This is a one-line gate in `main.swift` if you want
   to relax it to "warn but run".
 - **macOS 15.4+** recommended (needed to load real uBlock Origin via `WKWebExtension`);
@@ -41,7 +41,7 @@ Google Cloud project and no OAuth: it reuses the YouTube login you already have 
 
 ```
 git clone <this repo>
-cd mini-youtube
+cd SmartTube-for-Mac
 ./package.sh
 ```
 
@@ -58,7 +58,7 @@ swift run --package-path macos
 
 ## Sign in
 
-Click **Sign in** — that's it. MiniTube reads the YouTube login already in your Firefox profile
+Click **Sign in** — that's it. SmartTube for Mac reads the YouTube login already in your Firefox profile
 (the same idea as `yt-dlp --cookies-from-browser`): the backend reads Firefox's local
 `cookies.sqlite`, builds a `SAPISIDHASH` auth header from your session, and calls InnerTube as
 you. Cookies are read-only and never stored or sent anywhere except authenticated calls to
@@ -77,7 +77,7 @@ extension (`extension/`) that toggles shared settings — both secondary to the 
 macos/       SwiftUI app (SwiftPM executable; AppKit bootstrap + WebKit player)
 backend/     Vapor package — InnerTube client, Firefox-session auth, feed/search/watch APIs
 extension/   Companion Firefox WebExtension (optional)
-patches/     MiniTube's patch to uBlock Origin (mt-shim.js)
+patches/     SmartTube for Mac's patch to uBlock Origin (mt-shim.js)
 package.sh   Build + assemble YouTube.app + install
 ```
 
@@ -90,7 +90,7 @@ macOS will quarantine it — right-click → **Open**, or
 
 ## Legal
 
-MiniTube is a personal, educational project. It is **not affiliated with, authorized by, or
+SmartTube for Mac is a personal, educational project. It is **not affiliated with, authorized by, or
 endorsed by YouTube or Google.**
 
 - It uses YouTube's private InnerTube API and your local Firefox cookies to act as you.
