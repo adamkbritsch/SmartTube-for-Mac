@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="#(settings.theme)">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="/css/embed.css">
+  <script>
+    window.__SETTINGS__ = {
+      adBlock: #(settings.adBlock),
+      sponsorBlock: #(settings.sponsorBlock),
+      deArrow: #(settings.deArrow),
+      theaterMode: #(settings.theaterMode),
+      playbackSpeed: #(settings.playbackSpeed),
+      theme: "#(settings.theme)"
+    };
+    window.__VIDEO_ID__ = "#(videoID)";
+  </script>
+</head>
+<body>
+  <div class="player-box" id="player-box">
+    <div id="player"></div>
+
+    <!-- Click layer: click = play/pause, dblclick = fullscreen -->
+    <div class="click-layer" id="click-layer"></div>
+
+    <div class="preroll" id="preroll" style="display:none">
+      <span class="tag">Ad</span>
+      <div>Advertisement</div>
+      <button id="skip-ad">Skip ad</button>
+    </div>
+
+    <!-- Custom YouTube-style control bar -->
+    <div class="ctl" id="ctl">
+      <div class="ctl-progress" id="progress">
+        <div class="ctl-track">
+          <div class="ctl-buffered" id="buffered"></div>
+          <div class="ctl-played" id="played"></div>
+          <div class="ctl-hover" id="hoverbar"></div>
+          <div class="ctl-scrub" id="scrub"></div>
+        </div>
+        <div class="ctl-hovertime" id="hovertime"></div>
+      </div>
+      <div class="ctl-row">
+        <button class="ctl-btn" id="play" title="Play (k)"></button>
+        <button class="ctl-btn" id="next" title="Next"></button>
+        <div class="ctl-vol">
+          <button class="ctl-btn" id="mute" title="Mute (m)"></button>
+          <input type="range" class="ctl-volbar" id="vol" min="0" max="100" value="100">
+        </div>
+        <span class="ctl-time" id="time">0:00&nbsp;/&nbsp;0:00</span>
+        <span class="ctl-spacer"></span>
+        <button class="ctl-btn ctl-cc" id="cc" title="Subtitles/CC (c)"></button>
+        <button class="ctl-btn" id="settings" title="Settings"></button>
+        <button class="ctl-btn" id="miniplayer" title="Miniplayer (i)"></button>
+        <button class="ctl-btn" id="theater" title="Theater (t)"></button>
+        <button class="ctl-btn" id="fullscreen" title="Fullscreen (f)"></button>
+      </div>
+      <div class="ctl-menu" id="menu" hidden></div>
+    </div>
+
+    <div class="ctl-bigplay" id="bigplay" hidden></div>
+  </div>
+
+  <div class="toast-wrap" id="toasts"></div>
+
+  <script src="/js/common.js"></script>
+  <script src="/js/embed.js"></script>
+  <script src="https://www.youtube.com/iframe_api"></script>
+</body>
+</html>

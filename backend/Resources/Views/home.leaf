@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="#(settings.theme)">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MiniTube</title>
+  <link rel="stylesheet" href="/css/styles.css">
+  <script>
+    window.__SETTINGS__ = {
+      adBlock: #(settings.adBlock),
+      sponsorBlock: #(settings.sponsorBlock),
+      deArrow: #(settings.deArrow),
+      theaterMode: #(settings.theaterMode),
+      playbackSpeed: #(settings.playbackSpeed),
+      theme: "#(settings.theme)"
+    };
+  </script>
+</head>
+<body>
+  <header class="header">
+    <div class="logo">
+      <svg viewBox="0 0 30 22" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <rect x="0" y="0" width="30" height="22" rx="6" fill="#ff0033"></rect>
+        <path d="M12 6 L21 11 L12 16 Z" fill="#ffffff"></path>
+      </svg>
+      MiniTube <span class="beta">clone</span>
+    </div>
+    <div class="search">
+      <input type="text" placeholder="Search" aria-label="Search">
+      <button aria-label="Search">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"></circle><line x1="16.5" y1="16.5" x2="21" y2="21"></line></svg>
+      </button>
+    </div>
+    <div class="header-actions">
+      <button class="icon-btn" aria-label="Create"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg></button>
+      <button class="icon-btn" aria-label="Notifications"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.7 21a2 2 0 0 1-3.4 0"></path></svg></button>
+      <div class="avatar" title="You"></div>
+    </div>
+  </header>
+
+  <div class="layout">
+    <nav class="sidebar">
+      <div class="sb-item active">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 10.5 12 3l9 7.5"></path><path d="M5 9.5V21h14V9.5"></path></svg>
+        Home
+      </div>
+      <div class="sb-item">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="3" width="16" height="18" rx="4"></rect><path d="M10 8l5 4-5 4z"></path></svg>
+        Shorts
+      </div>
+      <div class="sb-item">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="5" width="20" height="14" rx="3"></rect><path d="M10 9l5 3-5 3z"></path></svg>
+        Subscriptions
+      </div>
+      <hr>
+      <div class="sb-head">You</div>
+      <div class="sb-item">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9"></path><path d="M12 7v5l3 2"></path></svg>
+        History
+      </div>
+      <div class="sb-item">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 5h11v14l-5.5-3L5 19z"></path></svg>
+        Playlists
+      </div>
+    </nav>
+
+    <main class="content">
+      <div class="chips">
+        <button class="chip active">All</button>
+        <button class="chip">Science</button>
+        <button class="chip">Tech</button>
+        <button class="chip">Challenges</button>
+        <button class="chip">Music</button>
+        <button class="chip">Live</button>
+        <button class="chip">Recently uploaded</button>
+      </div>
+      <div class="grid" id="grid"></div>
+    </main>
+  </div>
+
+  <div class="toast-wrap" id="toasts"></div>
+
+  <script src="/js/common.js"></script>
+  <script src="/js/home.js"></script>
+</body>
+</html>

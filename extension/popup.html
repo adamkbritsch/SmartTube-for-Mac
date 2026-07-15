@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header class="head">
+    <svg class="logo" viewBox="0 0 30 22" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <rect x="0" y="0" width="30" height="22" rx="6" fill="#ff0033"></rect>
+      <path d="M12 6 L21 11 L12 16 Z" fill="#ffffff"></path>
+    </svg>
+    <div>
+      <div class="title">MiniTube Controls</div>
+      <div class="sub">Companion extension</div>
+    </div>
+  </header>
+
+  <div id="status" class="status">Connecting…</div>
+
+  <section>
+    <h2>Reproduced extensions</h2>
+    <label class="row">
+      <div><div class="name">Ad Block</div><div class="hint">uBlock Origin · live EasyList</div></div>
+      <span class="switch"><input type="checkbox" data-key="adBlock"><span class="slider"></span></span>
+    </label>
+    <label class="row">
+      <div><div class="name">SponsorBlock</div><div class="hint">Auto-skip sponsor segments</div></div>
+      <span class="switch"><input type="checkbox" data-key="sponsorBlock"><span class="slider"></span></span>
+    </label>
+    <label class="row">
+      <div><div class="name">DeArrow</div><div class="hint">De-clickbait titles &amp; thumbnails</div></div>
+      <span class="switch"><input type="checkbox" data-key="deArrow"><span class="slider"></span></span>
+    </label>
+  </section>
+
+  <section>
+    <h2>Player &amp; UI</h2>
+    <label class="row">
+      <div><div class="name">Theater mode</div><div class="hint">Wide player layout</div></div>
+      <span class="switch"><input type="checkbox" data-key="theaterMode"><span class="slider"></span></span>
+    </label>
+    <label class="row">
+      <div><div class="name">Light theme</div><div class="hint">Toggle dark / light</div></div>
+      <span class="switch"><input type="checkbox" data-key="theme"><span class="slider"></span></span>
+    </label>
+    <div class="row">
+      <div><div class="name">Playback speed</div><div class="hint">Applied to the player</div></div>
+      <div class="speeds">
+        <button class="speed-btn" data-speed="1">1x</button>
+        <button class="speed-btn" data-speed="1.25">1.25x</button>
+        <button class="speed-btn" data-speed="1.5">1.5x</button>
+        <button class="speed-btn" data-speed="1.75">1.75x</button>
+        <button class="speed-btn" data-speed="2">2x</button>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Picture quality</h2>
+    <label class="row">
+      <div><div class="name">Max resolution</div><div class="hint">Force the highest available quality</div></div>
+      <span class="switch"><input type="checkbox" data-key="maxResolution"><span class="slider"></span></span>
+    </label>
+    <div class="row">
+      <div><div class="name">Enhance</div><div class="hint">GPU sharpen · spatial, not neural</div></div>
+      <div class="speeds">
+        <button class="speed-btn enh-btn" data-enhance="off">Off</button>
+        <button class="speed-btn enh-btn" data-enhance="subtle">Subtle</button>
+        <button class="speed-btn enh-btn" data-enhance="sharper">Sharper</button>
+      </div>
+    </div>
+  </section>
+
+  <footer>Writes to <code>localhost:8080</code> — also changes the macOS app.</footer>
+
+  <script src="popup.js"></script>
+</body>
+</html>

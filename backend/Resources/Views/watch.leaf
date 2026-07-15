@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="#(settings.theme)">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MiniTube &middot; Watch</title>
+  <link rel="stylesheet" href="/css/styles.css">
+  <script>
+    window.__SETTINGS__ = {
+      adBlock: #(settings.adBlock),
+      sponsorBlock: #(settings.sponsorBlock),
+      deArrow: #(settings.deArrow),
+      theaterMode: #(settings.theaterMode),
+      playbackSpeed: #(settings.playbackSpeed),
+      theme: "#(settings.theme)"
+    };
+    window.__VIDEO_ID__ = "#(videoID)";
+  </script>
+</head>
+<body>
+  <header class="header">
+    <a class="logo" href="/">
+      <svg viewBox="0 0 30 22" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <rect x="0" y="0" width="30" height="22" rx="6" fill="#ff0033"></rect>
+        <path d="M12 6 L21 11 L12 16 Z" fill="#ffffff"></path>
+      </svg>
+      MiniTube <span class="beta">clone</span>
+    </a>
+    <div class="search">
+      <input type="text" placeholder="Search" aria-label="Search">
+      <button aria-label="Search">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"></circle><line x1="16.5" y1="16.5" x2="21" y2="21"></line></svg>
+      </button>
+    </div>
+    <div class="header-actions">
+      <div class="avatar" title="You"></div>
+    </div>
+  </header>
+
+  <div class="watch" id="watch">
+    <div class="player-shell">
+      <div class="player-box">
+        <div id="player"></div>
+        <div class="preroll" id="preroll" style="display:none">
+          <span class="tag">Ad</span>
+          <div>Advertisement &middot; video will play after this</div>
+          <button id="skip-ad">Skip ad</button>
+        </div>
+      </div>
+
+      <h1 class="v-title" id="v-title">Loading&hellip;</h1>
+      <div class="v-row">
+        <div class="v-channel">
+          <div class="ch-avatar"></div>
+          <div>
+            <div class="name" id="v-channel">&nbsp;</div>
+            <div class="sub" style="font-size:12px;color:var(--muted)">1.2M subscribers</div>
+          </div>
+          <button class="subscribe">Subscribe</button>
+        </div>
+        <div class="pill-row">
+          <button class="pill" id="btn-theater">Theater</button>
+          <button class="pill" id="btn-speed">Speed 1x</button>
+        </div>
+      </div>
+
+      <div class="status-line" id="status"></div>
+
+      <div class="desc" id="desc"></div>
+    </div>
+
+    <aside class="recs" id="recs"></aside>
+  </div>
+
+  <div class="toast-wrap" id="toasts"></div>
+
+  <script src="/js/common.js"></script>
+  <script src="/js/watch.js"></script>
+  <script src="https://www.youtube.com/iframe_api"></script>
+</body>
+</html>

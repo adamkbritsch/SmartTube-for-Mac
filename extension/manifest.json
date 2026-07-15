@@ -1,0 +1,24 @@
+{
+  "manifest_version": 2,
+  "name": "MiniTube Controls",
+  "version": "1.0",
+  "description": "Toggle MiniTube's reproduced extension behaviors (uBlock / SponsorBlock / DeArrow) and player/UI features. Writes to the shared backend, so every change also reaches the web clone and the macOS app.",
+  "icons": {
+    "48": "icons/icon.svg",
+    "96": "icons/icon.svg"
+  },
+  "browser_action": {
+    "default_title": "MiniTube Controls",
+    "default_popup": "popup.html",
+    "default_icon": "icons/icon.svg"
+  },
+  "permissions": [
+    "http://localhost:8080/*",
+    "http://127.0.0.1:8080/*"
+  ],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "minitube-controls@example.com"
+    }
+  }
+}

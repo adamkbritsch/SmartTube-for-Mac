@@ -1,0 +1,10 @@
+{
+  "adBlock" : true,
+  "deArrow" : true,
+  "enhance" : "sharper",
+  "maxResolution" : true,
+  "playbackSpeed" : 1,
+  "sponsorBlock" : true,
+  "theaterMode" : false,
+  "theme" : "dark"
+}

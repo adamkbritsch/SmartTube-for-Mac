@@ -1,0 +1,14 @@
+# SwiftPM build output (both packages)
+.build/
+*.o
+*.swiftmodule
+
+# Built app bundle (produced by ./package.sh)
+YouTube.app/
+
+# Vendored extensions — fetched from their official releases at build time
+# (see package.sh + THIRD-PARTY.md). Only the patch source in patches/ is tracked.
+extensions/
+
+# macOS cruft
+.DS_Store
