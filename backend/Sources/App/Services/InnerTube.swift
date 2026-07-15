@@ -81,6 +81,22 @@ enum InnerTube {
         let views: String?
         let published: String?
         let durationSeconds: Double?
+        var previewUrl: String? = nil   // animated hover preview (an_webp), if YouTube provides one
+    }
+
+    /// The signed animated-preview URL (`i.ytimg.com/an_webp/…mqdefault_6s.webp`) YouTube ships
+    /// inside a video's renderer for the hover snippet. Its `sqp`/`rs` params are signed, so it
+    /// can only be lifted from the response — search the video's own node subtree for it.
+    private static func movingThumb(_ node: Any) -> String? {
+        if let d = node as? [String: Any] {
+            for (k, v) in d {
+                if k == "url", let s = v as? String, s.contains("an_webp") { return s }
+                if let r = movingThumb(v) { return r }
+            }
+        } else if let a = node as? [Any] {
+            for v in a { if let r = movingThumb(v) { return r } }
+        }
+        return nil
     }
 
     struct FeedPage: Sendable {
@@ -368,7 +384,8 @@ enum InnerTube {
                     channelAvatar: firstYT3URL(dict),
                     thumbnail: thumb(dict["thumbnail"]),
                     views: text(dict["viewCountText"]), published: text(dict["publishedTimeText"]),
-                    durationSeconds: parseDuration(text(dict["lengthText"]))
+                    durationSeconds: parseDuration(text(dict["lengthText"])),
+                    previewUrl: movingThumb(dict)
                 )
                 order.append(vid)
             }
@@ -401,7 +418,8 @@ enum InnerTube {
             thumbnail: thumbURL,
             views: parts.first(where: { $0.lowercased().contains("view") }),
             published: parts.first(where: { $0.lowercased().contains("ago") }),
-            durationSeconds: parseDuration(timeBadge(lvm))
+            durationSeconds: parseDuration(timeBadge(lvm)),
+            previewUrl: movingThumb(lvm)
         )
         order.append(id)
     }

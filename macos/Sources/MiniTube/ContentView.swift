@@ -134,8 +134,8 @@ private struct PlaybackReadout: View {
         }
     }
 
-    // Shows the decoded height, and "· off" when the adaptive sharpen is inactive
-    // (either the swatch is Off, or the source is 4K+).
+    // Shows the decoded height, and "· off" when the adaptive sharpen is inactive because the
+    // swatch is Off. At 4K+ the Enhance control is hidden entirely, so no "· off" suffix there.
     private var resLabel: String {
         let h = playback.height
         guard h > 0 else { return "" }
@@ -145,7 +145,57 @@ private struct PlaybackReadout: View {
         case 2160...: name = "4K"
         default:      name = "\(h)p"
         }
+        if h >= 2160 { return name }   // no sharpen exists at 4K+ → don't imply one is "off"
         return playback.enhanceActive ? name : "\(name) · off"
+    }
+}
+
+/// The Enhance (spatial sharpen) control + its GPU-saver chip. Isolated so it re-renders on the
+/// resolution readout — which lets it HIDE ENTIRELY at 4K+, where the sharpen filter is always
+/// off (feConvolveMatrix amount 0). Showing inert Off/Subtle/Sharper buttons there is clutter,
+/// so at ≥2160p this renders nothing and the bar collapses to just the resolution + quality controls.
+private struct EnhanceControls: View {
+    @EnvironmentObject var store: Store
+    @ObservedObject var playback: PlaybackState
+    @ObservedObject var gpuSaver = GPUSaver.shared
+    private var accent: Color { Color(red: 0.24, green: 0.65, blue: 1) }
+
+    var body: some View {
+        // height 0 = still unknown (show); ≥2160 = confirmed 4K/8K → sharpen does nothing → hide.
+        if playback.height < 2160 {
+            HStack(spacing: 10) {
+                Image(systemName: "wand.and.stars").font(.system(size: 12)).foregroundStyle(.secondary)
+                Text("Enhance").font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
+                HStack(spacing: 2) {
+                    seg("Off", "off"); seg("Subtle", "subtle"); seg("Sharper", "sharper")
+                }
+                .padding(2)
+                .background(Capsule().fill(Color.primary.opacity(0.08)))
+
+                if gpuSaver.active {
+                    HStack(spacing: 4) {
+                        Image(systemName: "leaf.fill").font(.system(size: 9))
+                        Text("GPU saver").font(.system(size: 10, weight: .semibold))
+                    }
+                    .padding(.horizontal, 7).frame(height: 18)
+                    .background(Capsule().fill(Color.green.opacity(0.18)))
+                    .foregroundStyle(.green)
+                    .help("Visionary is using the GPU — the Enhance sharpen filter is off to keep playback smooth. Resolution/HDR are unaffected (Max Quality still forces the best rendition; 4K/HDR decode runs on the hardware media engine, not the GPU Visionary needs). Restores automatically when Visionary quits.")
+                }
+            }
+        }
+    }
+
+    private func seg(_ label: String, _ value: String) -> some View {
+        let active = store.settings.enhance == value
+        return Button { store.setEnhance(value) } label: {
+            Text(label).font(.system(size: 12, weight: .medium))
+                .padding(.horizontal, 12).frame(height: 26)
+                .background(Capsule().fill(active ? AnyShapeStyle(accent) : AnyShapeStyle(Color.clear)))
+                .foregroundStyle(active ? AnyShapeStyle(Color.white) : AnyShapeStyle(Color.secondary))
+        }
+        .buttonStyle(.plain)
+        .help("GPU detail-sharpen (spatial, not neural)")
     }
 }
 
@@ -176,6 +226,13 @@ struct WatchPage: View {
             return same.isEmpty ? recs : same
         }
         return recs
+    }
+
+    // The channel filter is only meaningful when the recs mix this channel with others.
+    private var channelFilterUseful: Bool {
+        guard let ch = info?.channel, !ch.isEmpty else { return false }
+        let recs = info?.recommendations ?? []
+        return recs.contains { $0.channel == ch } && recs.contains { $0.channel != ch }
     }
 
     // Single real-YouTube player. Its own controls (incl. fullscreen) handle everything.
@@ -231,7 +288,10 @@ struct WatchPage: View {
                         Text("Autoplay").font(.caption).foregroundStyle(.secondary)
                         Toggle("", isOn: $autoplay).labelsHidden().toggleStyle(.switch).controlSize(.mini).clickable()
                     }
-                    if let ch = info?.channel, !ch.isEmpty {
+                    // Only show the All / From-channel filter when it would actually change the
+                    // list — i.e. the recs are a mix of this channel and others. If every rec is
+                    // from the uploader (or none are), the filter is a no-op, so hide it.
+                    if channelFilterUseful, let ch = info?.channel {
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack(spacing: 8) {
                                 recChip("All")
@@ -268,32 +328,13 @@ struct WatchPage: View {
     }
 
     // Picture-quality controls (max resolution + GPU "Enhance" sharpen) right under the player.
+    // The Enhance control + GPU-saver chip are isolated in EnhanceControls, which hides itself at
+    // 4K+ (nothing to sharpen). Per-second readouts likewise live in their own PlaybackReadout —
+    // WatchPage doesn't re-render on either.
     private var enhanceBar: some View {
         HStack(spacing: 10) {
-            Image(systemName: "wand.and.stars").font(.system(size: 12)).foregroundStyle(.secondary)
-            Text("Enhance").font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
-            HStack(spacing: 2) {
-                enhanceSeg("Off", "off")
-                enhanceSeg("Subtle", "subtle")
-                enhanceSeg("Sharper", "sharper")
-            }
-            .padding(2)
-            .background(Capsule().fill(Color.primary.opacity(0.08)))
-
-            // Per-second readouts live in their own view observing PlaybackState —
-            // WatchPage (and everything above it) no longer re-renders each tick.
+            EnhanceControls(playback: store.playback)
             PlaybackReadout(playback: store.playback)
-
-            if gpuSaver.active {
-                HStack(spacing: 4) {
-                    Image(systemName: "leaf.fill").font(.system(size: 9))
-                    Text("GPU saver").font(.system(size: 10, weight: .semibold))
-                }
-                .padding(.horizontal, 7).frame(height: 18)
-                .background(Capsule().fill(Color.green.opacity(0.18)))
-                .foregroundStyle(.green)
-                .help("Visionary is using the GPU — the Enhance sharpen filter is off to keep playback smooth. Resolution/HDR are unaffected (Max Quality still forces the best rendition; 4K/HDR decode runs on the hardware media engine, not the GPU Visionary needs). Restores automatically when Visionary quits.")
-            }
 
             Spacer(minLength: 8)
 
@@ -326,18 +367,6 @@ struct WatchPage: View {
     }
 
     private var accent: Color { Color(red: 0.24, green: 0.65, blue: 1) }
-
-    private func enhanceSeg(_ label: String, _ value: String) -> some View {
-        let active = store.settings.enhance == value
-        return Button { store.setEnhance(value) } label: {
-            Text(label).font(.system(size: 12, weight: .medium))
-                .padding(.horizontal, 12).frame(height: 26)
-                .background(Capsule().fill(active ? AnyShapeStyle(accent) : AnyShapeStyle(Color.clear)))
-                .foregroundStyle(active ? AnyShapeStyle(Color.white) : AnyShapeStyle(Color.secondary))
-        }
-        .buttonStyle(.plain)
-        .help("GPU detail-sharpen (spatial, not neural)")
-    }
 
     private func recChip(_ label: String) -> some View {
         let active = selectedChip == label
@@ -470,24 +499,31 @@ struct WatchPage: View {
         }
     }
 
-    private var descriptionBox: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                if let v = info?.views, !v.isEmpty { Text(v).font(.system(size: 13, weight: .semibold)) }
-                if let p = info?.published, !p.isEmpty { Text(p).font(.system(size: 13, weight: .semibold)).foregroundStyle(.secondary) }
-            }
-            if let d = info?.description, !d.isEmpty {
-                Text(d).font(.system(size: 13)).textSelection(.enabled)
-                    .lineLimit(descExpanded ? nil : 3)
-                    .fixedSize(horizontal: false, vertical: true)
-                Button(descExpanded ? "Show less" : "…more") {
-                    withAnimation(.easeInOut(duration: 0.15)) { descExpanded.toggle() }
+    // Hidden entirely until it has something to show — otherwise it's an empty gray card that
+    // flashes on every video open (info arrives async) and lingers for videos with no stats/desc.
+    @ViewBuilder private var descriptionBox: some View {
+        let views = (info?.views ?? "")
+        let published = (info?.published ?? "")
+        let desc = (info?.description ?? "")
+        if !views.isEmpty || !published.isEmpty || !desc.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    if !views.isEmpty { Text(views).font(.system(size: 13, weight: .semibold)) }
+                    if !published.isEmpty { Text(published).font(.system(size: 13, weight: .semibold)).foregroundStyle(.secondary) }
                 }
-                .buttonStyle(.plain).font(.system(size: 13, weight: .semibold)).foregroundStyle(.secondary).clickable()
+                if !desc.isEmpty {
+                    Text(desc).font(.system(size: 13)).textSelection(.enabled)
+                        .lineLimit(descExpanded ? nil : 3)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button(descExpanded ? "Show less" : "…more") {
+                        withAnimation(.easeInOut(duration: 0.15)) { descExpanded.toggle() }
+                    }
+                    .buttonStyle(.plain).font(.system(size: 13, weight: .semibold)).foregroundStyle(.secondary).clickable()
+                }
             }
+            .padding(12).frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.primary.opacity(0.06)).clipShape(RoundedRectangle(cornerRadius: 12))
         }
-        .padding(12).frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.primary.opacity(0.06)).clipShape(RoundedRectangle(cornerRadius: 12))
     }
 }
 
@@ -1339,6 +1375,10 @@ private struct VideoCard: View {
     let video: VideoListItem
     @State private var hover = false
     @State private var channelHover = false
+    // Hover-to-preview state.
+    @State private var previewOn = false
+    @State private var clip: PreviewClip? = nil
+    @State private var hoverTask: Task<Void, Never>? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -1358,8 +1398,34 @@ private struct VideoCard: View {
                 }
             }
         }
-        .onHover { hover = $0 }
+        .onHover { hovering in
+            hover = hovering
+            hoverTask?.cancel()
+            if hovering {
+                hoverTask = Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 550_000_000)   // ~0.55s dwell, like YouTube
+                    if Task.isCancelled { return }
+                    withAnimation(.easeIn(duration: 0.2)) { previewOn = true }
+                    // Smooth an_webp where the feed shipped one, else the light sampled-frame cycle.
+                    let c = await PreviewCache.load(previewUrl: video.previewUrl, videoId: video.id)
+                    if Task.isCancelled { return }
+                    withAnimation(.easeIn(duration: 0.2)) { clip = c }
+                }
+            } else {
+                hoverTask = nil
+                withAnimation(.easeOut(duration: 0.12)) { previewOn = false }
+                clip = nil
+            }
+        }
         .clickable()
+    }
+
+    /// The animated hover preview — always a light CGImage animation: the smooth an_webp clip
+    /// where the feed shipped one, else a cross-fading cycle of the video's sampled frames.
+    @ViewBuilder private var previewOverlay: some View {
+        if previewOn, let clip {
+            WebPPreviewView(clip: clip).transition(.opacity)
+        }
     }
 
     private var avatarView: some View {
@@ -1401,6 +1467,7 @@ private struct VideoCard: View {
             .overlay(
                 CachedImage(url: store.thumbnail(for: video)) { Rectangle().fill(Color.primary.opacity(0.12)) }
             )
+            .overlay { previewOverlay.allowsHitTesting(false) }
             .clipped()
             .clipShape(RoundedRectangle(cornerRadius: 12))
         .overlay(alignment: .topLeading) {

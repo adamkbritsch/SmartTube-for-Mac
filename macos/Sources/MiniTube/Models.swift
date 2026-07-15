@@ -33,6 +33,7 @@ struct VideoListItem: Codable, Identifiable, Hashable {
     let publishedText: String?
     let channelId: String?          // real: tap the channel name to open its page
     let channelAvatar: String?      // real: the uploader's profile picture
+    var previewUrl: String? = nil   // real: animated hover preview (an_webp); absent on the home feed
 }
 
 struct FeedPageResponse: Codable {

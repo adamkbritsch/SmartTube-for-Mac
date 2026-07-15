@@ -12,6 +12,10 @@ final class UBlockLoader {
     static let shared = UBlockLoader()
     private(set) var controller: WKWebExtensionController?
     private(set) var contexts: [String: WKWebExtensionContext] = [:]   // keyed by "uBOL" / "SponsorBlock"
+    /// The controller's data store. The player WebView MUST use this same store, otherwise
+    /// WKWebExtension silently refuses to inject content scripts into it (which is why
+    /// SponsorBlock — and uBO's cosmetic filtering — never actually ran on the page).
+    private(set) var dataStore: WKWebsiteDataStore?
     private var loading = false
 
     /// The extension's own settings/dashboard page URL (from its manifest options_ui).
@@ -27,11 +31,62 @@ final class UBlockLoader {
         ("SponsorBlock", "extensions/sponsorblock"),
     ]
 
+    // MARK: Tab/window model (required for content↔background messaging)
+    // Without a tab model, WKWebExtension rejects a content script's runtime.sendMessage
+    // with "Tab not found" — which silently breaks any extension that coordinates through
+    // its background page. uBО's cosmetic filtering doesn't need it, but SponsorBlock does
+    // (config, segment fetch, and skip all route through messages). Registering the player
+    // WebView as the one tab of one window makes that messaging resolve.
+    private let playerTab = PlayerTab()
+    private lazy var playerWindow = PlayerWindow(playerTab)
+    private let extDelegate = ExtDelegate()   // the ONE controller delegate; vends player + dashboard windows
+    private var tabRegistered = false
+
+    /// Register (or re-point) the player WebView as the extension host tab. Call from the
+    /// WebPlayer once the WebView exists, before it loads the page.
+    func attachPlayer(_ webView: WKWebView) {
+        guard let controller else { return }
+        playerTab.window = playerWindow
+        playerTab.webView = webView
+        if !tabRegistered {
+            tabRegistered = true
+            extDelegate.windows.insert(playerWindow, at: 0)
+            controller.didOpenWindow(playerWindow)
+            controller.didFocusWindow(playerWindow)
+            controller.didOpenTab(playerTab)
+            UBlockLoader.log("player tab registered — content↔background messaging enabled")
+        }
+    }
+
+    /// ExtensionSettings registers/unregisters its dashboard host window here so the SINGLE
+    /// controller delegate vends both the player and the open dashboard — instead of two
+    /// objects fighting over `controller.delegate` (which would nil out the player tab).
+    func registerHostWindow(_ w: any WKWebExtensionWindow, tab: any WKWebExtensionTab) {
+        guard let controller else { return }
+        extDelegate.windows.append(w)
+        controller.didOpenWindow(w)
+        controller.didFocusWindow(w)
+        controller.didOpenTab(tab)
+        controller.didSelectTabs([tab])
+    }
+    func unregisterHostWindow(_ w: any WKWebExtensionWindow, tab: any WKWebExtensionTab) {
+        guard let controller else { return }
+        controller.didDeselectTabs([tab])
+        extDelegate.windows.removeAll { ($0 as AnyObject) === (w as AnyObject) }
+        controller.didCloseWindow(w)
+        if tabRegistered { controller.didFocusWindow(playerWindow) }   // refocus the player
+    }
+
     func preload() async {
         guard controller == nil, !loading else { return }
         loading = true; defer { loading = false }
 
-        let controller = WKWebExtensionController()
+        // Non-persistent controller (in-memory, matches the player's cookie-less store). The
+        // player WebView is wired to this same `dataStore` — required for content-script injection.
+        let cfg = WKWebExtensionController.Configuration.nonPersistent()
+        self.dataStore = cfg.defaultWebsiteDataStore
+        let controller = WKWebExtensionController(configuration: cfg)
+        controller.delegate = extDelegate   // the single, persistent delegate (set once)
         var loadedAny = false
         for dir in UBlockLoader.stagedExtensionDirs() {
             do {
@@ -114,4 +169,41 @@ final class UBlockLoader {
         print("[ext] \(msg)")
         MTDebug.log("[ext] \(msg)")
     }
+}
+
+// MARK: - Minimal WKWebExtension tab/window/delegate
+// Just enough of the model for the controller to route content-script messages to the
+// background page (so `runtime.sendMessage` resolves instead of failing "Tab not found").
+// The app has a single player WebView at a time = one tab in one logical window.
+
+@available(macOS 15.4, *)
+final class PlayerTab: NSObject, WKWebExtensionTab {
+    weak var webView: WKWebView?
+    weak var window: (any WKWebExtensionWindow)?
+    func webView(for context: WKWebExtensionContext) -> WKWebView? { webView }
+    func window(for context: WKWebExtensionContext) -> (any WKWebExtensionWindow)? { window }
+    func url(for context: WKWebExtensionContext) -> URL? { webView?.url }
+    func title(for context: WKWebExtensionContext) -> String? { webView?.title }
+    func isSelected(for context: WKWebExtensionContext) -> Bool { true }
+    func isLoadingComplete(for context: WKWebExtensionContext) -> Bool { !(webView?.isLoading ?? true) }
+}
+
+@available(macOS 15.4, *)
+final class PlayerWindow: NSObject, WKWebExtensionWindow {
+    let tab: PlayerTab
+    init(_ tab: PlayerTab) { self.tab = tab }
+    func tabs(for context: WKWebExtensionContext) -> [any WKWebExtensionTab] { [tab] }
+    func activeTab(for context: WKWebExtensionContext) -> (any WKWebExtensionTab)? { tab }
+    func windowType(for context: WKWebExtensionContext) -> WKWebExtension.WindowType { .normal }
+    func windowState(for context: WKWebExtensionContext) -> WKWebExtension.WindowState { .normal }
+    func isPrivate(for context: WKWebExtensionContext) -> Bool { false }
+}
+
+@available(macOS 15.4, *)
+final class ExtDelegate: NSObject, WKWebExtensionControllerDelegate {
+    /// Player window first, then any open dashboard windows. `.last` is treated as focused
+    /// (a dashboard when open, else the player), which is what `tabs.query({currentWindow})` wants.
+    var windows: [any WKWebExtensionWindow] = []
+    func webExtensionController(_ c: WKWebExtensionController, openWindowsFor ctx: WKWebExtensionContext) -> [any WKWebExtensionWindow] { windows }
+    func webExtensionController(_ c: WKWebExtensionController, focusedWindowFor ctx: WKWebExtensionContext) -> (any WKWebExtensionWindow)? { windows.last }
 }

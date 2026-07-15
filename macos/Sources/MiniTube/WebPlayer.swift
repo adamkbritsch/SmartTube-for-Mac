@@ -26,7 +26,16 @@ struct WebPlayer: NSViewRepresentable {
         let config = WKWebViewConfiguration()
         config.mediaTypesRequiringUserActionForPlayback = []
         config.preferences.isElementFullscreenEnabled = true       // YouTube's own fullscreen button
-        config.websiteDataStore = .player
+        // Share the extension controller's store when it exists — WKWebExtension only injects
+        // content scripts into WebViews on the controller's OWN data store. Attach the controller
+        // and use its store together; fall back to the standalone cookie-less store when
+        // extensions are unavailable (macOS < 15.4).
+        if #available(macOS 15.4, *), let controller = UBlockLoader.shared.controller {
+            config.websiteDataStore = UBlockLoader.shared.dataStore ?? .player
+            config.webExtensionController = controller
+        } else {
+            config.websiteDataStore = .player
+        }
         config.userContentController.add(context.coordinator, name: "minitube")
         // flags FIRST at documentStart: the engine/enhance loops read window.__MT the
         // instant they start, so a user's disabled features are never transiently on.
@@ -40,11 +49,6 @@ struct WebPlayer: NSViewRepresentable {
             }
         }
 
-        // Attach the real uBlock Origin Lite extension (macOS 15.4+) if it loaded.
-        if #available(macOS 15.4, *), let controller = UBlockLoader.shared.controller {
-            config.webExtensionController = controller
-        }
-
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = context.coordinator
         context.coordinator.latestFlags = flagsJS
@@ -53,7 +57,31 @@ struct WebPlayer: NSViewRepresentable {
         // UA on WebKit served a broken path that hard-capped the forward buffer at ~60s;
         // Chrome is the matched/expected combo. UA has NO effect on ads (verified 4×).
         webView.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
-        context.coordinator.load(videoId, into: webView)
+        // Register this WebView as the extension host tab BEFORE loading, so a content
+        // script's runtime.sendMessage resolves (SponsorBlock's skip/config/segment fetch
+        // all route through the background page — without a tab it fails "Tab not found").
+        if #available(macOS 15.4, *) { UBlockLoader.shared.attachPlayer(webView) }
+        // Host-driven ad skip: dismiss adSlots video ads via the player's cancelPlayback() (the
+        // only reliable path since stripping adSlots from the response would freeze forward seeks).
+        context.coordinator.startAdSkip(webView)
+        // Sign the WebView into YouTube with the user's Firefox cookies BEFORE the first load, so
+        // playback is attested and far-forward seeks work (signed-out YouTube is SABR-throttled and
+        // can't jump to a distant position — verified). Read off-main; the initial load is gated on
+        // completion. No Firefox login → empty set → normal signed-out playback.
+        let coordinator = context.coordinator
+        let store = config.websiteDataStore
+        DispatchQueue.global(qos: .userInitiated).async {
+            let cookies = FirefoxCookies.load()
+            DispatchQueue.main.async {
+                guard !cookies.isEmpty else { coordinator.signInDidComplete(); return }
+                let group = DispatchGroup()
+                for c in cookies { group.enter(); store.httpCookieStore.setCookie(c) { group.leave() } }
+                group.notify(queue: .main) {
+                    Coordinator.debugLog("player signed in — \(cookies.count) YouTube/Google cookies installed")
+                    coordinator.signInDidComplete()
+                }
+            }
+        }
         return webView
     }
 
@@ -90,6 +118,7 @@ struct WebPlayer: NSViewRepresentable {
 
     // Stop audio the instant this player's view is removed.
     static func dismantleNSView(_ nsView: WKWebView, coordinator: Coordinator) {
+        coordinator.stopAdSkip()
         nsView.pauseAllMediaPlayback(completionHandler: nil)
         nsView.loadHTMLString("", baseURL: nil)
     }
@@ -106,22 +135,59 @@ struct WebPlayer: NSViewRepresentable {
         let sponsorBlock: Bool
         var latestFlags = ""       // current window.__MT — re-pushed after each page load
         private var loaded: String?
+        // Native ad-skip driver. adSlots-scheduled video ads CAN'T be stripped from the player
+        // response without freezing forward seeks (the SABR player re-reads adSlots at seek time),
+        // so the ad still starts — we dismiss it by calling the player's own cancelPlayback() the
+        // instant it enters an ad. This ONLY works when invoked from the host (evaluateJavaScript);
+        // the identical call from an injected page-timer is silently ignored (no user-activation),
+        // which is why this lives here and not in adBlockJS.
+        private weak var adSkipWebView: WKWebView?
+        private var adSkipTimer: Timer?
 
         init(onFullscreen: @escaping () -> Void, onEnhanceInfo: @escaping (Int, Double, Bool) -> Void, onEnded: @escaping () -> Void, onTheater: @escaping () -> Void, onMarkWatched: @escaping (String) -> Void, adBlock: Bool, sponsorBlock: Bool) {
             self.onFullscreen = onFullscreen; self.onEnhanceInfo = onEnhanceInfo; self.onEnded = onEnded; self.onTheater = onTheater; self.onMarkWatched = onMarkWatched
             self.adBlock = adBlock; self.sponsorBlock = sponsorBlock
         }
 
+        // Sign-in gate: the very first load waits until the Firefox auth cookies are installed
+        // (see makeNSView) so playback is attested — a signed-OUT session is SABR-throttled and
+        // can't far-forward-seek. load() records the desired video and no-ops until ready; the
+        // cookie completion calls signInDidComplete() to flush it. Video CHANGES afterward load
+        // normally (cookies already in the store, ready==true).
+        var signInReady = false
+        private var desiredVideo: String?
+        private weak var desiredWebView: WKWebView?
+
         func load(_ videoId: String, into webView: WKWebView) {
-            guard loaded != videoId,
+            desiredVideo = videoId; desiredWebView = webView
+            guard signInReady, loaded != videoId,
                   let url = URL(string: "https://www.youtube.com/watch?v=\(videoId)") else { return }
             loaded = videoId
             webView.load(URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData))
         }
 
+        func signInDidComplete() {
+            signInReady = true
+            if let v = desiredVideo, let w = desiredWebView { load(v, into: w) }
+        }
+
         // Flags now ride in as the FIRST documentStart user script (rebuilt on every
         // settings change), so each navigation starts with the real values — no
         // post-load re-push needed, and no defaults flash before it lands.
+
+        /// Begin polling the player (host-driven) so a starting ad is cancelled within ~0.5s.
+        /// The tick itself re-checks window.__MT.adBlock, so toggling ad-block off stops the skip
+        /// live without tearing down the timer. Verified: one cancelPlayback ends the whole ad pod
+        /// and content resumes; forward seeking still works afterward (adSlots left intact).
+        func startAdSkip(_ webView: WKWebView) {
+            adSkipWebView = webView
+            adSkipTimer?.invalidate()
+            adSkipTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak webView] _ in
+                webView?.evaluateJavaScript(WebPlayer.adSkipTick, completionHandler: nil)
+            }
+        }
+        func stopAdSkip() { adSkipTimer?.invalidate(); adSkipTimer = nil }
+        deinit { adSkipTimer?.invalidate() }
 
         /// Diagnostics go through the central debug gate — a normal run writes nothing.
         static func debugLog(_ msg: String) { MTDebug.log(msg) }
@@ -136,10 +202,6 @@ struct WebPlayer: NSViewRepresentable {
                 let a = (body["amount"] as? Double) ?? 0
                 let hdr = (body["hdr"] as? Bool) ?? false
                 onEnhanceInfo(h, a, hdr)
-            case "adprune":
-                let surface = (body["surface"] as? String) ?? "?"
-                let hadAds = (body["hadAds"] as? Bool) ?? false
-                Coordinator.debugLog("adprune surface=\(surface) hadAds=\(hadAds) → \(hadAds ? "PRUNED ad payload" : "clean (no ads present)")")
             case "theater":
                 onTheater()
             case "ended":
@@ -208,77 +270,104 @@ struct WebPlayer: NSViewRepresentable {
     })();
     """
 
-    /// uBlock Origin's YouTube ad-blocking technique (json-prune), run as the SOLE
-    /// ad controller. YouTube schedules ads from `adPlacements`/`playerAds`/`adSlots`
-    /// in the player response; uBO deletes those fields on every surface the player
-    /// reads them — the inline `ytInitialPlayerResponse` global, `fetch()` /player
-    /// responses (SPA nav), and `JSON.parse` (XHR). With the ad payload gone, NO ad
-    /// is ever loaded or played — nothing to cover or skip. These are uBO's exact
-    /// rules (quick-fixes.txt: json-prune of playerResponse.adPlacements/playerAds/
-    /// adSlots + adPlacements/playerAds/adSlots). Injected FIRST at documentStart so
-    /// it hooks the surfaces before YouTube's player code runs. Gated on __MT.adBlock.
+    /// Full ad-strip — uBlock Origin's json-prune of `adPlacements`/`playerAds`/`adSlots` from
+    /// the player response, so NO ad is ever scheduled or played (no flash, nothing to skip).
+    /// Stripping `adSlots` is safe here because the player runs SIGNED IN (see makeNSView /
+    /// FirefoxCookies): the earlier "deleting adSlots freezes forward seeks" was a
+    /// misattribution — the freeze was the SIGNED-OUT SABR throttle (a signed-out youtube.com
+    /// session can't fetch segments for a far seek regardless of the ad keys; verified bare
+    /// signed-out fails, signed-in succeeds even with adSlots deleted). Surfaces:
+    ///   • inline `ytInitialPlayerResponse` (fresh watch-page load) — delete the keys post-parse.
+    ///   • fetch()/XHR `/player` responses (SPA nav) — rename the keys in the raw response TEXT
+    ///     before parse, uBO-style, so that object is born ad-free.
+    /// The Coordinator's cancelPlayback timer stays as a backstop for anything a format change
+    /// might slip past this. Injected FIRST at documentStart. Gated on __MT.adBlock.
     static let adBlockJS = """
     (function(){
       if(!window.__MT) window.__MT = { adBlock:true };
       if(window.__mtAdPrune) return; window.__mtAdPrune = true;
-      var hits = 0;
-      function report(surface, hadAds){
-        if(!window.__MT.debug) return;
-        try { window.webkit.messageHandlers.minitube.postMessage({action:'adprune', surface:surface, hadAds:hadAds, n:++hits}); } catch(e){}
-      }
-      function prune(o){
+      function strip(o){
         try {
           if(!window.__MT.adBlock || !o || typeof o !== 'object') return o;
-          if(Array.isArray(o)){ for(var i=0;i<o.length;i++) prune(o[i]); return o; }
-          if('adPlacements' in o){ delete o.adPlacements; }
-          if('playerAds' in o){ delete o.playerAds; }
-          if('adSlots' in o){ delete o.adSlots; }
-          if(o.playerResponse && typeof o.playerResponse === 'object') prune(o.playerResponse);
+          if(Array.isArray(o)){ for(var i=0;i<o.length;i++) strip(o[i]); return o; }
+          if('adPlacements' in o) delete o.adPlacements;
+          if('playerAds' in o) delete o.playerAds;
+          if('adSlots' in o) delete o.adSlots;
+          if(o.playerResponse && typeof o.playerResponse === 'object') strip(o.playerResponse);
         } catch(e){}
         return o;
       }
-      // Is this the player response (or a wrapper of it)? Used only for debug reporting.
-      function playerLike(o){
-        return o && typeof o === 'object' &&
-               (o.streamingData || o.videoDetails || o.adPlacements || o.playerAds ||
-                (o.playerResponse && typeof o.playerResponse === 'object'));
+      // Rename the ad keys in raw response text so the parsed object is born ad-free.
+      function scrub(t){
+        if(!window.__MT.adBlock || typeof t !== 'string') return t;
+        if(t.indexOf('"adPlacements"') < 0 && t.indexOf('"playerAds"') < 0 && t.indexOf('"adSlots"') < 0) return t;
+        return t.replace(/"adPlacements"/g, '"no_ads"').replace(/"playerAds"/g, '"no_ads"').replace(/"adSlots"/g, '"no_ads"');
       }
-      function hadAds(o){
-        if(!o || typeof o !== 'object') return false;
-        return !!(o.adPlacements || o.playerAds || o.adSlots ||
-                 (o.playerResponse && (o.playerResponse.adPlacements || o.playerResponse.playerAds || o.playerResponse.adSlots)));
-      }
-      // (a) inline ytInitialPlayerResponse global (initial watch-page paint)
+      function wanted(u){ u = u || ''; return u.indexOf('/youtubei/') !== -1 || u.indexOf('/player') !== -1 || u.indexOf('get_watch') !== -1; }
+      // (a) inline ytInitialPlayerResponse global (fresh watch-page paint)
       try {
         var _v;
         Object.defineProperty(window, 'ytInitialPlayerResponse', {
           configurable: true,
           get: function(){ return _v; },
-          set: function(x){ if(playerLike(x)) report('ytInitialPlayerResponse', hadAds(x)); _v = prune(x); }
+          set: function(x){ _v = strip(x); }
         });
       } catch(e){}
       // (b) fetch() responses — /youtubei/v1/player on SPA navigation
       try {
-        var _rj = Response.prototype.json;
-        Response.prototype.json = function(){
-          var res = this;
-          return _rj.call(res).then(function(data){
-            try { var u = res.url || '';
-              if(u.indexOf('/player') !== -1 || u.indexOf('/youtubei/') !== -1 ||
-                 (data && (data.adPlacements || data.playerAds || data.adSlots))){
-                if(playerLike(data)) report('fetch:'+(u.indexOf('/player')!==-1?'player':'youtubei'), hadAds(data));
-                prune(data);
-              }
-            } catch(e){}
-            return data;
+        var _f = window.fetch;
+        window.fetch = function(){
+          return _f.apply(this, arguments).then(function(resp){
+            try {
+              if(!resp || !wanted(resp.url)) return resp;
+              return resp.clone().text().then(function(t){
+                var s = scrub(t);
+                if(s === t) return resp;
+                return new Response(s, { status: resp.status, statusText: resp.statusText, headers: resp.headers });
+              }).catch(function(){ return resp; });
+            } catch(e){ return resp; }
           });
         };
       } catch(e){}
-      // (c) JSON.parse — XHR responseText and any other parse path
+      // (c) XMLHttpRequest responses — shadow responseText/response with the scrubbed body,
+      // registered in open() so it runs before the page's own readystatechange handler reads it.
       try {
-        var _p = JSON.parse;
-        JSON.parse = function(){ var r = _p.apply(this, arguments);
-          try { if(r && typeof r === 'object') prune(r); } catch(e){} return r; };
+        var _open = XMLHttpRequest.prototype.open;
+        XMLHttpRequest.prototype.open = function(method, url){
+          try { this.__mtUrl = url; } catch(e){}
+          try {
+            this.addEventListener('readystatechange', function(){
+              if(this.readyState !== 4 || !wanted(this.__mtUrl)) return;
+              try {
+                var t = this.responseText, s = scrub(t);
+                if(s !== t){
+                  Object.defineProperty(this, 'responseText', { value: s, configurable: true });
+                  Object.defineProperty(this, 'response',     { value: s, configurable: true });
+                }
+              } catch(e){}
+            });
+          } catch(e){}
+          return _open.apply(this, arguments);
+        };
+      } catch(e){}
+    })();
+    """
+
+    /// One host-driven ad-skip tick (see Coordinator.startAdSkip). Runs ~2x/sec; a near-no-op
+    /// unless the player is mid-ad. cancelPlayback() dismisses the ad + resumes content; mute and
+    /// the Skip-button click are belt-and-suspenders. Re-checks the live ad-block flag so the
+    /// toggle governs it. NEVER touches the player response → forward seeking is unaffected.
+    static let adSkipTick = """
+    (function(){
+      try {
+        if(!(window.__MT && window.__MT.adBlock)) return;
+        var mp = document.getElementById('movie_player');
+        if(!mp || !mp.classList || !mp.classList.contains('ad-showing')) return;
+        var v = document.querySelector('video'); if(v) v.muted = true;
+        if(typeof mp.cancelPlayback === 'function'){ try { mp.cancelPlayback(); } catch(e){} }
+        try { mp.playVideo && mp.playVideo(); } catch(e){}
+        var sk = document.querySelector('.ytp-ad-skip-button, .ytp-skip-ad-button, .ytp-ad-skip-button-modern, .ytp-ad-skip-button-container button');
+        if(sk){ try { sk.click(); } catch(e){} }
       } catch(e){}
     })();
     """

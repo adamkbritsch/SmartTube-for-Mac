@@ -17,6 +17,7 @@ struct VideoListItem: Content {
     var publishedText: String? = nil   // real (home feed): "3 days ago"
     var channelId: String? = nil       // real (feed/search/recs): tap the channel name to open it
     var channelAvatar: String? = nil   // real: the uploader's profile picture
+    var previewUrl: String? = nil      // real: animated hover-preview (an_webp), when YouTube ships one
 }
 
 struct FeedPageResponse: Content {
@@ -338,7 +339,8 @@ enum VideosController {
             hasSponsorSegments: false, hasDeArrow: false,
             durationSeconds: fv.durationSeconds,
             viewCountText: fv.views, publishedText: fv.published,
-            channelId: fv.channelId, channelAvatar: fv.channelAvatar
+            channelId: fv.channelId, channelAvatar: fv.channelAvatar,
+            previewUrl: fv.previewUrl
         )
     }
 

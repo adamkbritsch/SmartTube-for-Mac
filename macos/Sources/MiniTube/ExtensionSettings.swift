@@ -221,34 +221,19 @@ private struct ExtensionSettingsWeb: NSViewRepresentable {
             return payload.removingPercentEncoding?.data(using: .utf8)
         }
 
-        /// Build the window/tab around the settings web view and announce it to the controller.
+        /// Build the window/tab around the settings web view and register it with the shared
+        /// controller delegate (owned by UBlockLoader) — so the player tab keeps working while
+        /// the dashboard is open, and isn't torn down when it closes.
         func attach(webView: WKWebView) {
             let tab = ExtHostTab(webView)
             tab.host = window
             window.tab = tab
             self.tab = tab
-            controller.delegate = self
-            // Verify the Swift methods actually bridged to the expected ObjC selectors —
-            // an optional-protocol signature mismatch fails silently otherwise.
-            ExtLog.write("bridge tab.webView=\(tab.responds(to: Selector("webViewForWebExtensionContext:"))) window.tabs=\(window.responds(to: Selector("tabsForWebExtensionContext:"))) deleg.openWindows=\(self.responds(to: Selector("webExtensionController:openWindowsForExtensionContext:")))")
-            controller.didOpenWindow(window)
-            controller.didFocusWindow(window)
-            controller.didOpenTab(tab)
-            controller.didSelectTabs([tab])
+            UBlockLoader.shared.registerHostWindow(window, tab: tab)
         }
 
         func detach() {
-            if let tab { controller.didDeselectTabs([tab]) }
-            controller.didCloseWindow(window)
-            if controller.delegate === self { controller.delegate = nil }
-        }
-
-        // MARK: WKWebExtensionControllerDelegate — vend our single host window.
-        func webExtensionController(_ c: WKWebExtensionController, openWindowsFor context: WKWebExtensionContext) -> [any WKWebExtensionWindow] {
-            ExtLog.write("delegate openWindowsFor"); return [window]
-        }
-        func webExtensionController(_ c: WKWebExtensionController, focusedWindowFor context: WKWebExtensionContext) -> (any WKWebExtensionWindow)? {
-            ExtLog.write("delegate focusedWindowFor"); return window
+            if let tab { UBlockLoader.shared.unregisterHostWindow(window, tab: tab) }
         }
 
         // MARK: WKNavigationDelegate — did the extension page actually load?
