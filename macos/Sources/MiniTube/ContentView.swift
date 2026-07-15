@@ -646,10 +646,7 @@ private struct HeaderBar: View {
                 HeaderIconButton(symbol: "chevron.left", size: 16, help: "Back") { store.goBack() }
             }
             Button { store.goHome() } label: {
-                HStack(spacing: 6) {
-                    LogoMark()
-                    Text("YouTube").font(.system(size: 20, weight: .bold)).tracking(-0.5)
-                }
+                BrandLogo(height: 26)
             }
             .buttonStyle(.plain).help("Home").clickable()
             Spacer(minLength: 12)
@@ -1556,6 +1553,26 @@ struct LogoMark: View {
         ZStack {
             RoundedRectangle(cornerRadius: 6).fill(Color(red: 1, green: 0, blue: 0.2)).frame(width: 30, height: 21)
             Image(systemName: "play.fill").foregroundColor(.white).font(.system(size: 10))
+        }
+    }
+}
+
+/// The SmartTube wordmark (play button + white "SmartTube"), bundled at
+/// Resources/smarttube-logo.png by package.sh. It's a horizontal lockup that already includes
+/// the name, so it stands in for the old LogoMark + "YouTube" text together. Loaded once and
+/// cached; falls back to the drawn LogoMark if the asset is missing (e.g. a bare `swift run`).
+struct BrandLogo: View {
+    var height: CGFloat = 26
+    private static let image: NSImage? = Bundle.main.url(forResource: "smarttube-logo", withExtension: "png")
+        .flatMap { NSImage(contentsOf: $0) }
+
+    var body: some View {
+        if let img = BrandLogo.image {
+            Image(nsImage: img).resizable().interpolation(.high)
+                .aspectRatio(contentMode: .fit).frame(height: height)
+                .accessibilityLabel("SmartTube")
+        } else {
+            LogoMark()   // fallback for dev/unbundled runs
         }
     }
 }

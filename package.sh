@@ -64,6 +64,7 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/Server"
 cp "$APP_BIN" "$APP/Contents/MacOS/YouTube"
 cp "$SRV_BIN" "$APP/Contents/Resources/Server/App"   # backend auto-spawned by the app
 cp "$REPO/YouTube.icns" "$APP/Contents/Resources/YouTube.icns"
+cp "$REPO/smarttube-logo.png" "$APP/Contents/Resources/smarttube-logo.png"   # in-app header wordmark
 cp -R "$EXT/ubo" "$APP/Contents/Resources/uBO"                   # real uBlock Origin (scriptlets/cosmetics)
 cp -R "$EXT/sponsorblock" "$APP/Contents/Resources/SponsorBlock" # real SponsorBlock
 printf 'APPL????' > "$APP/Contents/PkgInfo"
