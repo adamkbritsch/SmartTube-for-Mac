@@ -5,6 +5,15 @@
   "enhance" : "subtle",
   "maxResolution" : true,
   "playbackSpeed" : 1,
+  "sbCategories" : [
+    "sponsor",
+    "selfpromo",
+    "interaction",
+    "intro",
+    "outro",
+    "preview",
+    "music_offtopic"
+  ],
   "sponsorBlock" : true,
   "theaterMode" : false,
   "theme" : "dark"

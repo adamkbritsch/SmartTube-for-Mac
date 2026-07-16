@@ -69,6 +69,9 @@ struct WebPlayer: NSViewRepresentable {
     var gpuSaver: Bool = false          // Visionary running → shed the Enhance filter (resolution unaffected)
     var playbackSpeed: Double = 1.0     // player rate (1 / 1.25 / 1.5 / 1.75 / 2)
     var autoFullscreen: Bool = false    // auto-enter YouTube fullscreen when a video starts
+    var sbCategories: [String] = Settings.sbAllCategories       // SponsorBlock categories to skip
+    var adPruneKeys: [String] = AdRules.fallback.pruneKeys      // uBO json-prune keys (object delete)
+    var adScrubKeys: [String] = AdRules.fallback.scrubKeys      // uBO keys (response-text rename)
     var onFullscreen: () -> Void = {}
     var onEnhanceInfo: (Int, Double, Bool) -> Void = { _, _, _ in }   // (playing height, sharpen amount, isHDR)
     var onEnded: () -> Void = {}                                       // video finished (autoplay hook)
@@ -160,7 +163,27 @@ struct WebPlayer: NSViewRepresentable {
         // so the JS SponsorBlock runs and community segments still skip.
         var nativeSB = false
         if #available(macOS 15.4, *) { nativeSB = WebPlayer.playerUsesExtension && UBlockLoader.shared.contexts["SponsorBlock"] != nil }
-        return "window.__MT={adBlock:\(adBlock),sponsorBlock:\(sponsorBlock),maxResolution:\(maxResolution),enhance:'\(enhance)',playbackSpeed:\(playbackSpeed),autoFullscreen:\(autoFullscreen),nativeSB:\(nativeSB),gpuSaver:\(gpuSaver),debug:\(MTDebug.enabled)};"
+        // Ad keys + categories ride in as JSON ARRAYS (data), re-filtered here so nothing but
+        // safe tokens ever reaches the page — never string-concatenated into JS source.
+        let prune = WebPlayer.jsArray(adPruneKeys, allow: WebPlayer.keyRegex)
+        let scrub = WebPlayer.jsArray(adScrubKeys, allow: WebPlayer.keyRegex)
+        let cats = WebPlayer.jsArray(sbCategories, allow: WebPlayer.catRegex)
+        return "window.__MT={adBlock:\(adBlock),sponsorBlock:\(sponsorBlock),maxResolution:\(maxResolution),enhance:'\(enhance)',playbackSpeed:\(playbackSpeed),autoFullscreen:\(autoFullscreen),nativeSB:\(nativeSB),gpuSaver:\(gpuSaver),adPruneKeys:\(prune),adScrubKeys:\(scrub),sbCategories:\(cats),debug:\(MTDebug.enabled)};"
+    }
+
+    private static let keyRegex = try! NSRegularExpression(pattern: "^[A-Za-z0-9_-]{2,64}$")
+    private static let catRegex = try! NSRegularExpression(pattern: "^[a-z_]{3,32}$")
+
+    /// Serialize a string array to a JS array literal, keeping only items matching `allow`
+    /// and capping at 32. JSONSerialization escapes safely — but since the regex already
+    /// restricts to alnum/_/- there is nothing dangerous to embed.
+    static func jsArray(_ items: [String], allow: NSRegularExpression) -> String {
+        let safe = items.filter { s in
+            allow.firstMatch(in: s, range: NSRange(s.startIndex..., in: s)) != nil
+        }.prefix(32)
+        guard let data = try? JSONSerialization.data(withJSONObject: Array(safe)),
+              let s = String(data: data, encoding: .utf8) else { return "[]" }
+        return s
     }
 
     func updateNSView(_ container: PlayerContainer, context: Context) {
@@ -344,6 +367,11 @@ struct WebPlayer: NSViewRepresentable {
                 let on = (body["on"] as? Bool) ?? false
                 let why = (body["why"] as? String) ?? (on ? "ad-detected" : "")
                 Coordinator.debugLog("admute \(on ? "MUTE" : "restore") \(why)")
+            case "adcfg":
+                let prune = (body["prune"] as? [String]) ?? []
+                let scrub = (body["scrub"] as? [String]) ?? []
+                let cats = (body["cats"] as? [String]) ?? []
+                Coordinator.debugLog("adcfg prune=\(prune) scrub=\(scrub) cats=\(cats)")
             default:
                 break
             }
@@ -396,39 +424,54 @@ struct WebPlayer: NSViewRepresentable {
     })();
     """
 
-    /// Full ad-strip — uBlock Origin's json-prune of `adPlacements`/`playerAds`/`adSlots` from
-    /// the player response, so NO ad is ever scheduled or played (no flash, nothing to skip).
-    /// Stripping `adSlots` is safe here because the player runs SIGNED IN (see makeNSView /
-    /// FirefoxCookies): the earlier "deleting adSlots freezes forward seeks" was a
-    /// misattribution — the freeze was the SIGNED-OUT SABR throttle (a signed-out youtube.com
-    /// session can't fetch segments for a far seek regardless of the ad keys; verified bare
-    /// signed-out fails, signed-in succeeds even with adSlots deleted). Surfaces:
+    /// Full ad-strip — uBlock Origin's json-prune of the YouTube ad keys from the player
+    /// response, so NO ad is ever scheduled or played (no flash, nothing to skip). The key
+    /// list is DATA-DRIVEN from __MT.adPruneKeys / __MT.adScrubKeys (served by the backend from
+    /// uBO's live upstream rules), with the classic triple as fallback — so when YouTube changes
+    /// ad delivery, uBO's upstream fix flows in with no app update. Stripping `adSlots` is safe
+    /// because the player runs SIGNED IN (see makeNSView / FirefoxCookies): the earlier "deleting
+    /// adSlots freezes forward seeks" was the SIGNED-OUT SABR throttle, not the ad keys. Surfaces:
     ///   • inline `ytInitialPlayerResponse` (fresh watch-page load) — delete the keys post-parse.
     ///   • fetch()/XHR `/player` responses (SPA nav) — rename the keys in the raw response TEXT
     ///     before parse, uBO-style, so that object is born ad-free.
-    /// The Coordinator's cancelPlayback timer stays as a backstop for anything a format change
-    /// might slip past this. Injected FIRST at documentStart. Gated on __MT.adBlock.
+    /// The Coordinator's cancelPlayback timer stays as a backstop. Injected FIRST at documentStart.
+    /// Gated on __MT.adBlock. Keys are re-read each call so a live flag push takes effect.
     static let adBlockJS = """
     (function(){
       if(!window.__MT) window.__MT = { adBlock:true };
       if(window.__mtAdPrune) return; window.__mtAdPrune = true;
+      var KRE = /^[A-Za-z0-9_-]{2,64}$/;
+      var FALLBACK = ['adPlacements','playerAds','adSlots'];
+      function pKeys(){ var k = window.__MT.adPruneKeys; k = (k && k.length) ? k : FALLBACK; return k.filter(function(x){ return typeof x==='string' && KRE.test(x); }); }
+      function sKeys(){ var k = window.__MT.adScrubKeys; k = (k && k.length) ? k : FALLBACK; return k.filter(function(x){ return typeof x==='string' && KRE.test(x); }); }
       function strip(o){
         try {
           if(!window.__MT.adBlock || !o || typeof o !== 'object') return o;
           if(Array.isArray(o)){ for(var i=0;i<o.length;i++) strip(o[i]); return o; }
-          if('adPlacements' in o) delete o.adPlacements;
-          if('playerAds' in o) delete o.playerAds;
-          if('adSlots' in o) delete o.adSlots;
+          var ks = pKeys();
+          for(var j=0;j<ks.length;j++){ if(ks[j] in o) delete o[ks[j]]; }
           if(o.playerResponse && typeof o.playerResponse === 'object') strip(o.playerResponse);
         } catch(e){}
         return o;
       }
-      // Rename the ad keys in raw response text so the parsed object is born ad-free.
+      // Rename ad keys in raw response text so the parsed object is born ad-free. Rebuild the
+      // combined regex only when the key set changes (keys are alnum-only → nothing to escape).
+      var _sig = null, _re = null;
+      function scrubRe(){ var ks = sKeys(); var sig = ks.join('|'); if(sig !== _sig){ _sig = sig; _re = sig ? new RegExp('"(' + sig + ')"', 'g') : null; } return _re; }
       function scrub(t){
         if(!window.__MT.adBlock || typeof t !== 'string') return t;
-        if(t.indexOf('"adPlacements"') < 0 && t.indexOf('"playerAds"') < 0 && t.indexOf('"adSlots"') < 0) return t;
-        return t.replace(/"adPlacements"/g, '"no_ads"').replace(/"playerAds"/g, '"no_ads"').replace(/"adSlots"/g, '"no_ads"');
+        var re = scrubRe(); if(!re) return t;
+        var ks = sKeys(), hit = false;
+        for(var i=0;i<ks.length;i++){ if(t.indexOf('"'+ks[i]+'"') >= 0){ hit = true; break; } }
+        if(!hit) return t;
+        return t.replace(re, '"no_ads"');
       }
+      // DEBUG-only: report the active config, and re-report whenever the live key/category set
+      // changes (a flag live-push landing), so headless runs can confirm server-delivered keys.
+      try { if(window.__MT.debug){ var _cfg=''; setInterval(function(){
+        var sig = pKeys().join(',')+'|'+sKeys().join(',')+'|'+((window.__MT.sbCategories||[]).join(','));
+        if(sig!==_cfg){ _cfg=sig; try { window.webkit.messageHandlers.minitube.postMessage({action:'adcfg', prune: pKeys(), scrub: sKeys(), cats: (window.__MT.sbCategories||[])}); } catch(e){} }
+      }, 1000); } } catch(e){}
       function wanted(u){ u = u || ''; return u.indexOf('/youtubei/') !== -1 || u.indexOf('/player') !== -1 || u.indexOf('get_watch') !== -1; }
       // (a) inline ytInitialPlayerResponse global (fresh watch-page paint)
       try {
@@ -548,29 +591,38 @@ struct WebPlayer: NSViewRepresentable {
     })();
     """
 
-    /// SponsorBlock skip (community segments). Ad handling now lives entirely in
-    /// adBlockJS (uBlock Origin's json-prune) — this no longer touches ads.
+    /// SponsorBlock skip (community segments from sponsor.ajay.app — the live upstream source,
+    /// so this "uses the updates" with no app release). Categories are DATA-DRIVEN from
+    /// __MT.sbCategories (the user's Settings). Ad handling lives entirely in adBlockJS.
     static let engineJS = """
     (function(){
       if(!window.__MT) window.__MT = { sponsorBlock:true };
-      var segs = [], lastId = null;
+      var CRE = /^[a-z_]{3,32}$/;
+      var CAT_FALLBACK = ['sponsor','selfpromo','interaction','intro','outro','preview','music_offtopic'];
+      var segs = [], lastKey = null;
       function vid(){ try { return new URLSearchParams(location.search).get('v'); } catch(e){ return null; } }
-      function loadSegs(){
-        var id = vid(); if(!id) return;
-        fetch('https://sponsor.ajay.app/api/skipSegments?videoID='+id+'&categories=%5B%22sponsor%22%2C%22selfpromo%22%2C%22interaction%22%2C%22intro%22%2C%22outro%22%2C%22preview%22%2C%22music_offtopic%22%5D')
+      function cats(){ var c = window.__MT.sbCategories; c = (c && c.length !== undefined) ? c : CAT_FALLBACK;
+        return c.filter(function(x){ return typeof x==='string' && CRE.test(x); }); }
+      function loadSegs(id, c){
+        fetch('https://sponsor.ajay.app/api/skipSegments?videoID='+id+'&categories='+encodeURIComponent(JSON.stringify(c)))
           .then(function(r){ return r.ok ? r.json() : []; })
           .then(function(d){ segs = (d||[]).filter(function(s){ return s.segment && s.segment.length>=2; }); })
           .catch(function(){});
       }
-      // Fetch segments only when the JS skipper is actually the one skipping —
-      // never when SponsorBlock is off or the native extension handles it.
-      setInterval(function(){ var id=vid(); if(id && id!==lastId){ lastId=id; segs=[];
-        if(window.__MT.sponsorBlock && !window.__MT.nativeSB) loadSegs(); } }, 800);
+      // Re-fetch when the video, the on/off state, OR the category set changes — so a mid-video
+      // category toggle (flags live-push) takes effect within ~1s, and enabling SponsorBlock
+      // mid-video actually fetches (it previously waited for the next video). Never when the
+      // native extension handles it (nativeSB).
+      setInterval(function(){
+        var id = vid(); if(!id) return;
+        var c = cats();
+        var on = window.__MT.sponsorBlock && !window.__MT.nativeSB;
+        var key = id + '|' + (on ? 1 : 0) + '|' + c.join(',');
+        if(key !== lastKey){ lastKey = key; segs = []; if(on && c.length) loadSegs(id, c); }
+      }, 800);
 
       setInterval(function(){
         var v = document.querySelector('video.html5-main-video') || document.querySelector('video');
-        // Skip the JS SponsorBlock when the REAL SponsorBlock extension is loaded (nativeSB) —
-        // both seeking near the same boundary caused double-skip jitter. Keep as fallback otherwise.
         if(v && window.__MT.sponsorBlock && !window.__MT.nativeSB && segs.length){
           var t = v.currentTime;
           for(var i=0;i<segs.length;i++){ var s=segs[i]; if(s.actionType && s.actionType!=='skip') continue; if(t>=s.segment[0] && t<s.segment[1]-0.3){ v.currentTime=s.segment[1]; break; } }

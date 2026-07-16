@@ -37,8 +37,10 @@ Needs an **Apple Silicon M3 or newer** Mac and **Firefox** signed into YouTube �
   YouTube history, so recommendations and the red "watched" bar stay in sync).
 - **HDR** on Apple Silicon **M3+** (see [Requirements](#requirements)) — genuine 2160p60 HDR
   via the system EDR pipeline.
-- **Ad blocking** via the real **uBlock Origin** extension (`WKWebExtension`, macOS 15.4+),
-  backed by an inline ad-payload prune so ads never load; plus **SponsorBlock** auto-skip.
+- **Ad blocking** driven by **uBlock Origin's filter rules**: the bundled backend re-downloads
+  uBO's YouTube ad-strip rules (uAssets) at runtime and the player prunes the ad payload from the
+  response, so ads never load — and when YouTube changes ad delivery, uBO's upstream fix flows in
+  with no app update. Plus **SponsorBlock** auto-skip with per-category toggles in Settings.
 - **Extras:** a GPU "Enhance" detail-sharpen, a GPU-saver mode that automatically sheds load
   when another GPU-heavy app is running, a max-resolution pin, theater mode, and an HDR
   discovery shelf.
@@ -62,8 +64,9 @@ Needs an **Apple Silicon M3 or newer** Mac and **Firefox** signed into YouTube �
   SmartTube for Mac checks for an AV1 hardware decoder at launch and, on older Macs, tells you why and
   exits (rather than degrade to 1080p SDR). This is a one-line gate in `main.swift` if you want
   to relax it to "warn but run".
-- **macOS 15.4+** recommended (needed to load real uBlock Origin via `WKWebExtension`);
-  macOS 14 is the minimum to launch.
+- **macOS 14+** to launch. (macOS 15.4+ is needed only for the experimental in-player
+  `WKWebExtension` mode, `MT_PLAYER_EXT=1` — off by default because it hangs the watch page on
+  macOS 26; ad-blocking/SponsorBlock use uBO's rules + the community API directly instead.)
 - **Firefox**, logged into YouTube (that's where the session comes from).
 
 That's it to *run* the [downloadable app](#download). Building from source additionally needs a recent **Swift toolchain** (5.9+ — the Command Line Tools are enough, full Xcode is not required).
@@ -79,9 +82,10 @@ cd SmartTube-for-Mac
 ```
 
 `package.sh` builds both Swift packages, downloads uBlock Origin + SponsorBlock from their
-official releases (first build only; see [THIRD-PARTY.md](THIRD-PARTY.md)), assembles
-`SmartTube.app`, and installs it to `/Applications`. Launch it from there. The app **auto-spawns
-its own backend** on `127.0.0.1:8080` — there's no separate server to start.
+official releases (first build only, bundled for the experimental `MT_PLAYER_EXT=1` mode; see
+[THIRD-PARTY.md](THIRD-PARTY.md)), assembles `SmartTube.app`, and installs it to `/Applications`.
+Launch it from there. The app **auto-spawns its own backend** on `127.0.0.1:8080` — there's no
+separate server to start. The backend downloads uBO's live ad-strip rules at runtime.
 
 For development you can run the pieces directly:
 ```
@@ -128,8 +132,8 @@ endorsed by YouTube or Google.**
 
 - It uses YouTube's private InnerTube API and your local Firefox cookies to act as you.
   Nothing leaves your machine except the calls YouTube would make for you anyway.
-- It blocks ads (uBlock Origin) and skips sponsor segments (SponsorBlock). This may conflict
-  with YouTube's Terms of Service. **Use at your own risk.**
+- It blocks ads (uBlock Origin's filter rules) and skips sponsor segments (SponsorBlock). This may
+  conflict with YouTube's Terms of Service. **Use at your own risk.**
 - It does **not** download video files; playback is always YouTube's own player.
 - Provided "as is" under the MIT license, with no warranty. You are responsible for your use.
 

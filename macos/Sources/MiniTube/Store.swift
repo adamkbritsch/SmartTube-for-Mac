@@ -10,13 +10,14 @@ final class PlaybackState: ObservableObject {
     @Published var hdr: Bool = false           // true → the current video is genuinely HDR
 }
 
-/// Talks to the shared backend and polls `/api/settings` every 2s. When the
-/// companion Firefox extension (or the web UI) changes a setting, this store's
-/// `@Published settings` updates and the whole native UI re-renders — that's the
-/// extension-affects-the-Swift-app cross-effect.
+/// Talks to the shared backend and polls `/api/settings` every 2s. Settings live on the
+/// backend (`/api/settings`) so any client — this app, the web UI, the companion Firefox
+/// extension — can write them; a change made anywhere flows back into `@Published settings`
+/// and the whole native UI re-renders.
 @MainActor
 final class Store: ObservableObject {
     @Published var settings = Settings.default
+    @Published var adRules = AdRules.fallback   // uBO-derived ad-strip keys (GET /api/adrules)
     @Published var videos: [VideoListItem] = []
     @Published var reachable = false
     @Published var account = Account.empty
@@ -54,6 +55,10 @@ final class Store: ObservableObject {
             var tick = 0
             while !Task.isCancelled {
                 await self?.fetchSettings()
+                // Ad rules: retry every tick until the FIRST success (the backend spawns async, so
+                // the boot fetch usually races ahead of it), then only a periodic refresh every
+                // ~15 min to bound staleness after a manual /api/refresh.
+                await self?.fetchAdRules(force: tick % 450 == 0)
                 // Account changes are rare after bootstrap — poll it at 1/5 rate once
                 // connected (settings stay at 2s so toggles keep feeling instant).
                 let bootstrapping = await self?.stillBootstrapping ?? false
@@ -557,6 +562,18 @@ final class Store: ObservableObject {
         Task { await patchSettings("{\"autoFullscreen\":\(on)}") }
     }
 
+    /// Toggle one SponsorBlock category. Rebuilds the canonical-ordered list, optimistic
+    /// local update; the backend allowlists + the 2s poll reconciles.
+    func setSbCategory(_ id: String, _ on: Bool) {
+        guard Settings.sbAllCategories.contains(id) else { return }
+        let new = Settings.sbAllCategories.filter { $0 == id ? on : settings.sbCategories.contains($0) }
+        settings.sbCategories = new
+        struct P: Encodable { let sbCategories: [String] }
+        if let d = try? JSONEncoder().encode(P(sbCategories: new)), let body = String(data: d, encoding: .utf8) {
+            Task { await patchSettings(body) }
+        }
+    }
+
     // MARK: - Account write actions (real subscribe / like)
 
     private struct ActionResult: Decodable { let ok: Bool }
@@ -590,6 +607,28 @@ final class Store: ObservableObject {
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = json.data(using: .utf8)
         _ = try? await URLSession.shared.data(for: req)   // 2s poll reconciles authoritative state
+    }
+
+    private var adRulesFetched = false
+
+    func fetchAdRules(force: Bool = false) async {
+        // Fetch once successfully (retried by the poll until the backend is up), then only on
+        // `force` (the ~15 min periodic refresh). The player embeds the fallback triple, so
+        // ad-blocking works from the first frame regardless of when the real rules land.
+        if adRulesFetched && !force { return }
+        guard let url = URL(string: "\(base)/api/adrules") else { return }
+        do {
+            let (data, _) = try await URLSession.shared.data(from: url)
+            let r = try JSONDecoder().decode(AdRules.self, from: data)
+            adRulesFetched = true
+            if r != adRules {
+                print("[MiniTube] ad rules -> prune=\(r.pruneKeys) scrub=\(r.scrubKeys)")
+                adRules = r
+            }
+        } catch {
+            // Keep the current (fallback or last-good) rules and retry next tick.
+            logDecodeFailure("adrules", error)
+        }
     }
 
     func fetchSettings() async {

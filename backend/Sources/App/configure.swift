@@ -33,9 +33,10 @@ public func configure(_ app: Application) async throws {
 
     app.views.use(.leaf)
 
-    // Shared state (settings persisted next to the package).
+    // Shared state (settings + last-good ad rules persisted next to the package).
     let settingsPath = app.directory.workingDirectory + "settings.json"
-    app.state = AppState(seed: CatalogSeed.videos, settingsPath: settingsPath)
+    let adRulesPath = app.directory.workingDirectory + "adrules.json"
+    app.state = AppState(seed: CatalogSeed.videos, settingsPath: settingsPath, adRulesPath: adRulesPath)
 
     // Firefox-session auth state (cookie sign-in; no OAuth client needed).
     app.auth = AuthState(threadPool: app.threadPool)
@@ -64,6 +65,10 @@ extension Application {
             if let rules = await UBlockListService.fetch(client: app.client, logger: app.logger) {
                 await app.state.setUBlock(rules)
             }
+            // uBO YouTube ad-strip rules (uAssets) — the live "use the updates" path.
+            if let ad = await AdRuleService.fetch(client: app.client, logger: app.logger) {
+                await app.state.setAdRules(ad)
+            }
 
             var enriched: [Video] = []
             for v in await app.state.catalog {
@@ -79,10 +84,17 @@ extension Application {
             }
             app.logger.info("MiniTube warm-up complete (\(enriched.count) videos)")
 
-            // Scheduled uBlock list refresh.
+            // Scheduled refresh: ad-strip rules every 6h (YouTube ad changes get upstream
+            // fixes within hours), EasyList cosmetics every 4th tick (~24h, unchanged).
+            var tick = 0
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 24 * 60 * 60 * 1_000_000_000)
-                if let rules = await UBlockListService.fetch(client: app.client, logger: app.logger) {
+                try? await Task.sleep(nanoseconds: 6 * 60 * 60 * 1_000_000_000)
+                tick += 1
+                if let ad = await AdRuleService.fetch(client: app.client, logger: app.logger) {
+                    await app.state.setAdRules(ad)
+                    app.logger.info("ad rules refreshed (scheduled)")
+                }
+                if tick % 4 == 0, let rules = await UBlockListService.fetch(client: app.client, logger: app.logger) {
                     await app.state.setUBlock(rules)
                     app.logger.info("uBlock list refreshed (scheduled)")
                 }

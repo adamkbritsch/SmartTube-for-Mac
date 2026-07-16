@@ -20,8 +20,18 @@ enum SettingsController {
         await req.state.ublock
     }
 
-    /// Force an immediate re-pull of the upstream filter list.
+    /// The live, auto-updating YouTube ad-strip keys (uBO json-prune rules). The player
+    /// deletes `pruneKeys` from the parsed player response and renames `scrubKeys` to
+    /// "no_ads" in raw /player response text.
+    static func adrules(_ req: Request) async throws -> AdRules {
+        await req.state.adRules
+    }
+
+    /// Force an immediate re-pull of the upstream lists (ad rules + EasyList).
     static func refresh(_ req: Request) async throws -> UBlockRules {
+        if let ad = await AdRuleService.fetch(client: req.client, logger: req.logger) {
+            await req.state.setAdRules(ad)
+        }
         if let rules = await UBlockListService.fetch(client: req.client, logger: req.logger) {
             await req.state.setUBlock(rules)
         }

@@ -51,13 +51,12 @@ struct ContentView: View {
     @State private var selectedChip = "All"
     @State private var selectedSidebar = "Home"
     @State private var sidebarCollapsed = false
-    @State private var showExtSettings = false
     @State private var showSettings = false
 
     var body: some View {
         ZStack {
             VStack(spacing: 0) {
-                HeaderBar(search: $search, sidebarCollapsed: $sidebarCollapsed, showExtSettings: $showExtSettings, showSettings: $showSettings)
+                HeaderBar(search: $search, sidebarCollapsed: $sidebarCollapsed, showSettings: $showSettings)
                 Divider().opacity(0.4)
                 ZStack {
                     // Browse layer stays mounted while watching so feed scroll/position survives a round-trip.
@@ -89,9 +88,6 @@ struct ContentView: View {
                 }
             }
             .background(themeBackground(store.settings.theme))
-            .sheet(isPresented: $showExtSettings) {
-                ExtensionSettingsSheet().environmentObject(store)
-            }
             .sheet(isPresented: $showSettings) {
                 SettingsSheet().environmentObject(store)
             }
@@ -99,11 +95,6 @@ struct ContentView: View {
         .preferredColorScheme(store.settings.theme == "dark" ? .dark : .light)
         .frame(minWidth: 940, minHeight: 580)
         .onAppear {
-            // Debug hook: `touch /tmp/mt-open-ext` before launch auto-opens the
-            // extension-settings sheet so the load path can be tested headlessly.
-            if FileManager.default.fileExists(atPath: "/tmp/mt-open-ext") {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { showExtSettings = true }
-            }
             // Debug hook: write a video id to /tmp/mt-open-watch to auto-open it, so
             // the ad-prune path can be exercised headlessly.
             if let id = try? String(contentsOfFile: "/tmp/mt-open-watch", encoding: .utf8)
@@ -194,6 +185,8 @@ struct WatchPage: View {
                   maxResolution: store.settings.maxResolution, enhance: store.settings.enhance,
                   gpuSaver: gpuSaver.active, playbackSpeed: store.settings.playbackSpeed,
                   autoFullscreen: store.settings.autoFullscreen,
+                  sbCategories: store.settings.sbCategories,
+                  adPruneKeys: store.adRules.pruneKeys, adScrubKeys: store.adRules.scrubKeys,
                   onEnhanceInfo: { h, a, hdr in Task { @MainActor in store.reportEnhance(height: h, amount: a, hdr: hdr) } },
                   onEnded: {
                       // Autoplay: the toggle in the up-next rail now actually does something.
@@ -587,7 +580,6 @@ private struct HeaderBar: View {
     @EnvironmentObject var store: Store
     @Binding var search: String
     @Binding var sidebarCollapsed: Bool
-    @Binding var showExtSettings: Bool
     @Binding var showSettings: Bool
     @State private var showNotifications = false
     @State private var showAccountMenu = false
@@ -610,9 +602,6 @@ private struct HeaderBar: View {
             Spacer(minLength: 12)
             HeaderIconButton(symbol: "gearshape", size: 16, help: "Settings") {
                 showSettings = true
-            }
-            HeaderIconButton(symbol: "puzzlepiece.extension", size: 16, help: "uBlock Origin Lite & SponsorBlock settings") {
-                showExtSettings = true
             }
             HeaderIconButton(symbol: "bell", help: "Notifications") {
                 showNotifications.toggle()
@@ -1333,7 +1322,7 @@ private struct AdCard: View {
                 .padding(.horizontal, 6).padding(.vertical, 2)
                 .background(Color(red: 1, green: 0, blue: 0.2)).foregroundColor(.white)
                 .clipShape(RoundedRectangle(cornerRadius: 4))
-            Text("Sponsored placement — hidden automatically when Ad Block (uBlock) is on.")
+            Text("Sponsored placement — hidden automatically when Ad blocking is on.")
                 .font(.callout).foregroundStyle(.secondary)
             Spacer()
         }

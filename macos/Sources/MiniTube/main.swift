@@ -34,7 +34,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         backend.startIfNeeded()   // spawn the Vapor server if it isn't already up
-        if #available(macOS 15.4, *) { Task { await UBlockLoader.shared.preload() } }   // real uBlock Origin Lite
+        // The in-player WKWebExtension mode is OFF by default (it hangs navigation on macOS 26);
+        // only stage/load the extensions when opted back in for a retest (MT_PLAYER_EXT=1).
+        if #available(macOS 15.4, *), WebPlayer.playerUsesExtension { Task { await UBlockLoader.shared.preload() } }
         let store = Store()
         self.store = store
         let root = ContentView().environmentObject(store)

@@ -11,15 +11,12 @@ import WebKit
 final class UBlockLoader {
     static let shared = UBlockLoader()
     private(set) var controller: WKWebExtensionController?
-    private(set) var contexts: [String: WKWebExtensionContext] = [:]   // keyed by "uBOL" / "SponsorBlock"
+    private(set) var contexts: [String: WKWebExtensionContext] = [:]   // keyed by "uBO" / "SponsorBlock"
     /// The controller's data store. The player WebView MUST use this same store, otherwise
     /// WKWebExtension silently refuses to inject content scripts into it (which is why
     /// SponsorBlock — and uBO's cosmetic filtering — never actually ran on the page).
     private(set) var dataStore: WKWebsiteDataStore?
     private var loading = false
-
-    /// The extension's own settings/dashboard page URL (from its manifest options_ui).
-    func settingsURL(for name: String) -> URL? { contexts[name]?.optionsPageURL }
 
     /// (Resources bundle name, dev repo path) for each extension to load.
     /// uBlock Origin note: its webRequest network engine is inert under
@@ -56,25 +53,6 @@ final class UBlockLoader {
             controller.didOpenTab(playerTab)
             UBlockLoader.log("player tab registered — content↔background messaging enabled")
         }
-    }
-
-    /// ExtensionSettings registers/unregisters its dashboard host window here so the SINGLE
-    /// controller delegate vends both the player and the open dashboard — instead of two
-    /// objects fighting over `controller.delegate` (which would nil out the player tab).
-    func registerHostWindow(_ w: any WKWebExtensionWindow, tab: any WKWebExtensionTab) {
-        guard let controller else { return }
-        extDelegate.windows.append(w)
-        controller.didOpenWindow(w)
-        controller.didFocusWindow(w)
-        controller.didOpenTab(tab)
-        controller.didSelectTabs([tab])
-    }
-    func unregisterHostWindow(_ w: any WKWebExtensionWindow, tab: any WKWebExtensionTab) {
-        guard let controller else { return }
-        controller.didDeselectTabs([tab])
-        extDelegate.windows.removeAll { ($0 as AnyObject) === (w as AnyObject) }
-        controller.didCloseWindow(w)
-        if tabRegistered { controller.didFocusWindow(playerWindow) }   // refocus the player
     }
 
     func preload() async {

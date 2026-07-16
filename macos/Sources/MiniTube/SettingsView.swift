@@ -1,10 +1,10 @@
 import SwiftUI
 
 /// Native app Settings panel — opened by the gear in the header. Groups the settings the backend
-/// models (ad-block / SponsorBlock / DeArrow, playback speed / max-quality / Enhance, theme /
-/// theater, and account) into one place. Every control reads `store.settings.*` and writes through
-/// a `Store` setter (optimistic local update + `PATCH /api/settings`), so it stays in sync with the
-/// inline enhance bar under the player AND the companion Firefox extension (shared `/api/settings`).
+/// models (ad-block / SponsorBlock + per-category / DeArrow, playback speed / max-quality / Enhance,
+/// theme / theater, and account) into one place. Every control reads `store.settings.*` and writes
+/// through a `Store` setter (optimistic local update + `PATCH /api/settings`), so it stays in sync
+/// with the inline enhance bar under the player and any other client on the shared `/api/settings`.
 struct SettingsSheet: View {
     @EnvironmentObject var store: Store
     @Environment(\.dismiss) private var dismiss
@@ -26,6 +26,13 @@ struct SettingsSheet: View {
                         toggleRow("Ad blocking", "Block YouTube video ads", store.settings.adBlock) { store.setAdBlock($0) }
                         rowDivider
                         toggleRow("SponsorBlock", "Auto-skip sponsor segments", store.settings.sponsorBlock) { store.setSponsorBlock($0) }
+                        // Per-category toggles — shown only when SponsorBlock is on (hide inert UI).
+                        if store.settings.sponsorBlock {
+                            ForEach(SettingsSheet.sbCats, id: \.0) { cat in
+                                rowDivider
+                                subToggleRow(cat.1, cat.2, store.settings.sbCategories.contains(cat.0)) { store.setSbCategory(cat.0, $0) }
+                            }
+                        }
                         rowDivider
                         toggleRow("DeArrow", "De-clickbait titles & thumbnails", store.settings.deArrow) { store.setDeArrow($0) }
                     }
@@ -80,6 +87,28 @@ struct SettingsSheet: View {
         }
         .padding(.horizontal, 12).padding(.vertical, 9)
     }
+
+    /// Indented toggle row for the SponsorBlock sub-categories (visually nested under it).
+    private func subToggleRow(_ name: String, _ hint: String, _ isOn: Bool, _ set: @escaping (Bool) -> Void) -> some View {
+        HStack {
+            label(name, hint).padding(.leading, 22)
+            Spacer(minLength: 10)
+            Toggle("", isOn: Binding(get: { isOn }, set: { set($0) }))
+                .labelsHidden().toggleStyle(.switch).controlSize(.small).clickable()
+        }
+        .padding(.horizontal, 12).padding(.vertical, 7)
+    }
+
+    /// SponsorBlock skip categories: (id matching Settings.sbAllCategories, label, hint).
+    static let sbCats: [(String, String, String)] = [
+        ("sponsor", "Sponsors", "Paid promotions & sponsorships"),
+        ("selfpromo", "Self-promotion", "Merch, donations, unpaid promos"),
+        ("interaction", "Interaction reminders", "Like / subscribe prompts"),
+        ("intro", "Intros", "Intermissions & intro animations"),
+        ("outro", "Endcards & credits", ""),
+        ("preview", "Previews & recaps", ""),
+        ("music_offtopic", "Non-music sections", "In music videos"),
+    ]
 
     private func segRow<V: Hashable>(_ name: String, _ hint: String, options: [(String, V)], selected: V, _ set: @escaping (V) -> Void) -> some View {
         HStack {

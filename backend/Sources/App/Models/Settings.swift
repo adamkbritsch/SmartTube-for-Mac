@@ -14,11 +14,17 @@ struct Settings: Content, Sendable, Equatable {
     var playbackSpeed: Double
     var theme: String        // "dark" | "light"
 
-    // Picture quality (real-YouTube player). Inline defaults keep an older
-    // settings.json (without these keys) decoding cleanly instead of resetting.
+    // Picture quality (real-YouTube player). NOTE: inline defaults do NOT by themselves
+    // make an older settings.json decode-tolerant — synthesized Decodable throws on a
+    // missing key regardless. AppState.loadSettings handles that by decoding via
+    // SettingsPatch; these defaults are the memberwise-init/.default values.
     var maxResolution: Bool = true  // force the highest available source resolution
     var enhance: String = "subtle"  // GPU detail-sharpen preset: "off" | "subtle" | "sharper"
     var autoFullscreen: Bool = false // auto-enter fullscreen when a video starts playing
+    var sbCategories: [String] = Settings.sbAllCategories  // SponsorBlock categories to auto-skip
+
+    /// Canonical SponsorBlock skip categories, in display order.
+    static let sbAllCategories = ["sponsor", "selfpromo", "interaction", "intro", "outro", "preview", "music_offtopic"]
 
     static let `default` = Settings(
         adBlock: true,
@@ -29,7 +35,8 @@ struct Settings: Content, Sendable, Equatable {
         theme: "dark",
         maxResolution: true,
         enhance: "subtle",
-        autoFullscreen: false
+        autoFullscreen: false,
+        sbCategories: Settings.sbAllCategories
     )
 }
 
@@ -48,6 +55,7 @@ struct SettingsPatch: Content, Sendable {
     var maxResolution: Bool?
     var enhance: String?
     var autoFullscreen: Bool?
+    var sbCategories: [String]?
 
     func applied(to s: Settings) -> Settings {
         var out = s
@@ -60,6 +68,9 @@ struct SettingsPatch: Content, Sendable {
         if let v = maxResolution { out.maxResolution = v }
         if let v = enhance, enhancePresets.contains(v) { out.enhance = v }
         if let v = autoFullscreen { out.autoFullscreen = v }
+        // Allowlist to canonical categories in canonical order (drops unknowns/dupes;
+        // an empty array is legal — the user turned every category off).
+        if let v = sbCategories { out.sbCategories = Settings.sbAllCategories.filter { v.contains($0) } }
         return out
     }
 }

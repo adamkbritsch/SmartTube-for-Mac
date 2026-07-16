@@ -1,7 +1,9 @@
 import Foundation
 
-/// Mirrors the backend `/api/settings` shape. Optional keys the backend omits when
-/// nil decode fine because the properties are non-optional with server defaults.
+/// Mirrors the backend `/api/settings` shape. Decoding is missing-key tolerant via the
+/// `init(from:)` extension below — inline property defaults alone are NOT (synthesized
+/// Decodable throws on a missing key), which matters when a freshly built app polls an
+/// older still-running backend.
 struct Settings: Codable, Equatable {
     var adBlock: Bool
     var sponsorBlock: Bool
@@ -12,12 +14,60 @@ struct Settings: Codable, Equatable {
     var maxResolution: Bool = true          // force highest available source resolution
     var enhance: String = "subtle"          // GPU sharpen preset: "off" | "subtle" | "sharper"
     var autoFullscreen: Bool = false        // auto-enter fullscreen when a video starts
+    var sbCategories: [String] = Settings.sbAllCategories   // SponsorBlock categories to auto-skip
+
+    /// Canonical SponsorBlock skip categories, in display order.
+    static let sbAllCategories = ["sponsor", "selfpromo", "interaction", "intro", "outro", "preview", "music_offtopic"]
 
     static let `default` = Settings(
         adBlock: true, sponsorBlock: true, deArrow: true,
         theaterMode: false, playbackSpeed: 1.0, theme: "dark",
-        maxResolution: true, enhance: "subtle", autoFullscreen: false
+        maxResolution: true, enhance: "subtle", autoFullscreen: false,
+        sbCategories: Settings.sbAllCategories
     )
+}
+
+extension Settings {
+    // Decode-tolerant: the six original keys are strict; the newer keys fall back to
+    // defaults if absent (kept in an EXTENSION so the memberwise init `.default` uses
+    // still exists). Guards new-app-vs-old-backend skew during development.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        adBlock = try c.decode(Bool.self, forKey: .adBlock)
+        sponsorBlock = try c.decode(Bool.self, forKey: .sponsorBlock)
+        deArrow = try c.decode(Bool.self, forKey: .deArrow)
+        theaterMode = try c.decode(Bool.self, forKey: .theaterMode)
+        playbackSpeed = try c.decode(Double.self, forKey: .playbackSpeed)
+        theme = try c.decode(String.self, forKey: .theme)
+        maxResolution = (try? c.decode(Bool.self, forKey: .maxResolution)) ?? true
+        enhance = (try? c.decode(String.self, forKey: .enhance)) ?? "subtle"
+        autoFullscreen = (try? c.decode(Bool.self, forKey: .autoFullscreen)) ?? false
+        sbCategories = (try? c.decode([String].self, forKey: .sbCategories)) ?? Settings.sbAllCategories
+    }
+}
+
+/// YouTube ad-strip keys served by the backend (`GET /api/adrules`), derived from uBO's
+/// live upstream filter rules. `pruneKeys` are deleted from the parsed player response;
+/// `scrubKeys` are renamed to "no_ads" in raw /player response text. Decode-tolerant so a
+/// missing/empty set falls back to the built-in triple (ad-blocking never regresses).
+struct AdRules: Codable, Equatable {
+    var pruneKeys: [String]
+    var scrubKeys: [String]
+
+    static let fallback = AdRules(
+        pruneKeys: ["adPlacements", "playerAds", "adSlots"],
+        scrubKeys: ["adPlacements", "playerAds", "adSlots"]
+    )
+}
+
+extension AdRules {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let p = (try? c.decode([String].self, forKey: .pruneKeys)) ?? []
+        let s = (try? c.decode([String].self, forKey: .scrubKeys)) ?? []
+        pruneKeys = p.isEmpty ? AdRules.fallback.pruneKeys : p
+        scrubKeys = s.isEmpty ? AdRules.fallback.scrubKeys : s
+    }
 }
 
 struct VideoListItem: Codable, Identifiable, Hashable {
