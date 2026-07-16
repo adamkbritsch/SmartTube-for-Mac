@@ -61,9 +61,12 @@ Needs an **Apple Silicon M3 or newer** Mac and **Firefox** signed into YouTube �
 - **macOS 15.4+** recommended (needed to load real uBlock Origin via `WKWebExtension`);
   macOS 14 is the minimum to launch.
 - **Firefox**, logged into YouTube (that's where the session comes from).
-- A recent **Swift toolchain** (5.9+, Command Line Tools — full Xcode not required).
+
+That's it to *run* the [downloadable app](#download). Building from source additionally needs a recent **Swift toolchain** (5.9+ — the Command Line Tools are enough, full Xcode is not required).
 
 ## Build & run
+
+Prefer the [prebuilt DMG](#download) unless you want to build it yourself. From source:
 
 ```
 git clone <this repo>
@@ -73,7 +76,7 @@ cd SmartTube-for-Mac
 
 `package.sh` builds both Swift packages, downloads uBlock Origin + SponsorBlock from their
 official releases (first build only; see [THIRD-PARTY.md](THIRD-PARTY.md)), assembles
-`YouTube.app`, and installs it to `/Applications`. Launch it from there. The app **auto-spawns
+`SmartTube.app`, and installs it to `/Applications`. Launch it from there. The app **auto-spawns
 its own backend** on `127.0.0.1:8080` — there's no separate server to start.
 
 For development you can run the pieces directly:
