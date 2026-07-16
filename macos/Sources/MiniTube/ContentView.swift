@@ -50,11 +50,12 @@ struct ContentView: View {
     @State private var selectedSidebar = "Home"
     @State private var sidebarCollapsed = false
     @State private var showExtSettings = false
+    @State private var showSettings = false
 
     var body: some View {
         ZStack {
             VStack(spacing: 0) {
-                HeaderBar(search: $search, sidebarCollapsed: $sidebarCollapsed, showExtSettings: $showExtSettings)
+                HeaderBar(search: $search, sidebarCollapsed: $sidebarCollapsed, showExtSettings: $showExtSettings, showSettings: $showSettings)
                 Divider().opacity(0.4)
                 ZStack {
                     // Browse layer stays mounted while watching so feed scroll/position survives a round-trip.
@@ -88,6 +89,9 @@ struct ContentView: View {
             .background(themeBackground(store.settings.theme))
             .sheet(isPresented: $showExtSettings) {
                 ExtensionSettingsSheet().environmentObject(store)
+            }
+            .sheet(isPresented: $showSettings) {
+                SettingsSheet().environmentObject(store)
             }
         }
         .preferredColorScheme(store.settings.theme == "dark" ? .dark : .light)
@@ -239,7 +243,7 @@ struct WatchPage: View {
     private var playerSlot: some View {
         WebPlayer(videoId: videoId, adBlock: store.settings.adBlock, sponsorBlock: store.settings.sponsorBlock,
                   maxResolution: store.settings.maxResolution, enhance: store.settings.enhance,
-                  gpuSaver: gpuSaver.active,
+                  gpuSaver: gpuSaver.active, playbackSpeed: store.settings.playbackSpeed,
                   onEnhanceInfo: { h, a, hdr in Task { @MainActor in store.reportEnhance(height: h, amount: a, hdr: hdr) } },
                   onEnded: {
                       // Autoplay: the toggle in the up-next rail now actually does something.
@@ -634,6 +638,7 @@ private struct HeaderBar: View {
     @Binding var search: String
     @Binding var sidebarCollapsed: Bool
     @Binding var showExtSettings: Bool
+    @Binding var showSettings: Bool
     @State private var showNotifications = false
     @FocusState private var searchFocused: Bool
 
@@ -652,6 +657,9 @@ private struct HeaderBar: View {
             Spacer(minLength: 12)
             searchField
             Spacer(minLength: 12)
+            HeaderIconButton(symbol: "gearshape", size: 16, help: "Settings") {
+                showSettings = true
+            }
             HeaderIconButton(symbol: "puzzlepiece.extension", size: 16, help: "uBlock Origin Lite & SponsorBlock settings") {
                 showExtSettings = true
             }

@@ -523,6 +523,35 @@ final class Store: ObservableObject {
         Task { await patchSettings("{\"theaterMode\":\(on)}") }
     }
 
+    func setAdBlock(_ on: Bool) {
+        settings.adBlock = on
+        Task { await patchSettings("{\"adBlock\":\(on)}") }
+    }
+
+    func setSponsorBlock(_ on: Bool) {
+        settings.sponsorBlock = on
+        Task { await patchSettings("{\"sponsorBlock\":\(on)}") }
+    }
+
+    func setDeArrow(_ on: Bool) {
+        settings.deArrow = on
+        Task { await patchSettings("{\"deArrow\":\(on)}") }
+    }
+
+    /// Theme is validated server-side to "dark"|"light"; guard here too.
+    func setTheme(_ value: String) {
+        guard value == "dark" || value == "light" else { return }
+        settings.theme = value
+        Task { await patchSettings("{\"theme\":\"\(value)\"}") }
+    }
+
+    /// Player rate. Backend clamps to 0.25...3.0; the UI offers 1/1.25/1.5/1.75/2.
+    func setPlaybackSpeed(_ value: Double) {
+        let v = min(max(value, 0.25), 3.0)
+        settings.playbackSpeed = v
+        Task { await patchSettings("{\"playbackSpeed\":\(v)}") }
+    }
+
     // MARK: - Account write actions (real subscribe / like)
 
     private struct ActionResult: Decodable { let ok: Bool }

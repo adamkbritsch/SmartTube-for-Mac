@@ -16,6 +16,7 @@ struct WebPlayer: NSViewRepresentable {
     var maxResolution: Bool = true      // force highest available source resolution
     var enhance: String = "subtle"      // GPU sharpen preset: "off" | "subtle" | "sharper"
     var gpuSaver: Bool = false          // Visionary running → shed the Enhance filter (resolution unaffected)
+    var playbackSpeed: Double = 1.0     // player rate (1 / 1.25 / 1.5 / 1.75 / 2)
     var onFullscreen: () -> Void = {}
     var onEnhanceInfo: (Int, Double, Bool) -> Void = { _, _, _ in }   // (playing height, sharpen amount, isHDR)
     var onEnded: () -> Void = {}                                       // video finished (autoplay hook)
@@ -90,7 +91,7 @@ struct WebPlayer: NSViewRepresentable {
     private var flagsJS: String {
         var nativeSB = false
         if #available(macOS 15.4, *) { nativeSB = UBlockLoader.shared.contexts["SponsorBlock"] != nil }
-        return "window.__MT={adBlock:\(adBlock),sponsorBlock:\(sponsorBlock),maxResolution:\(maxResolution),enhance:'\(enhance)',nativeSB:\(nativeSB),gpuSaver:\(gpuSaver),debug:\(MTDebug.enabled)};"
+        return "window.__MT={adBlock:\(adBlock),sponsorBlock:\(sponsorBlock),maxResolution:\(maxResolution),enhance:'\(enhance)',playbackSpeed:\(playbackSpeed),nativeSB:\(nativeSB),gpuSaver:\(gpuSaver),debug:\(MTDebug.enabled)};"
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
@@ -415,6 +416,7 @@ struct WebPlayer: NSViewRepresentable {
       if(!window.__MT) window.__MT = {};
       if(window.__MT.maxResolution === undefined) window.__MT.maxResolution = true;
       if(window.__MT.enhance === undefined) window.__MT.enhance = 'subtle';
+      if(window.__MT.playbackSpeed === undefined) window.__MT.playbackSpeed = 1;
 
       function post(m){ try { window.webkit.messageHandlers.minitube.postMessage(m); } catch(e){} }
 
@@ -607,7 +609,24 @@ struct WebPlayer: NSViewRepresentable {
         }
       }
 
-      function tick(){ forceMaxQuality(); applyEnhance(); hookEnded(); maybeMarkWatched(); }
+      // Playback speed: keep the player at the app's chosen rate (window.__MT.playbackSpeed).
+      // Re-assert whenever the player drifts from it — notably YouTube resets the rate to 1 on
+      // every SPA navigation, so this restores it on the next video. All offered rates
+      // (1/1.25/1.5/1.75/2) are standard YouTube-supported rates.
+      function applyPlaybackRate(){
+        var v = document.querySelector('video.html5-main-video'); if(!v) return;
+        var want = +window.__MT.playbackSpeed || 1;
+        // The <video> element's rate is the reliable truth (movie_player.getPlaybackRate() can
+        // lag/report 1 while playback is actually faster). Only act on real drift — the initial
+        // set, a changed setting, or YouTube resetting the rate to 1 on SPA navigation.
+        if(Math.abs((v.playbackRate || 1) - want) > 0.001){
+          var mp = document.getElementById('movie_player');
+          if(mp && typeof mp.setPlaybackRate === 'function'){ try { mp.setPlaybackRate(want); } catch(e){} }
+          try { v.playbackRate = want; } catch(e){}
+        }
+      }
+
+      function tick(){ forceMaxQuality(); applyPlaybackRate(); applyEnhance(); hookEnded(); maybeMarkWatched(); }
       setInterval(tick, 1000);
       // YouTube is an SPA — quality + player element reset on each navigation.
       document.addEventListener('yt-navigate-finish', tick, true);
