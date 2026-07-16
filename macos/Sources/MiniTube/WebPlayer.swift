@@ -389,18 +389,15 @@ struct WebPlayer: NSViewRepresentable {
         var mp = document.getElementById('movie_player'); var v = document.querySelector('video');
         if(!mp || !v) return;
         var id; try { id = new URLSearchParams(location.search).get('v'); } catch(e){ return; }
-        if(!id) return;
-        var st = window.__mtFs || (window.__mtFs = {});
-        if(st.vid !== id){ st.vid = id; st.done = false; st.tries = 0; }              // new video → re-arm
-        if(st.done) return;
-        // Entered fullscreen → mark done (so exiting it isn't fought; a new video re-arms).
-        if(document.fullscreenElement || document.webkitFullscreenElement){ st.done = true; return; }
-        if(mp.classList.contains('ad-showing')) return;                              // wait past ads
-        if(v.paused || (v.currentTime || 0) < 0.3) return;                           // wait until playing
-        if(st.tries >= 16){ st.done = true; return; }                               // give up after ~8s of tries
-        st.tries++;
-        // Retry the click each tick until it takes — right after an ad→content swap the button
-        // isn't immediately actionable, so a single click can no-op.
+        if(!id || window.__mtFsVid === id) return;                 // handled this video already
+        if(document.fullscreenElement || document.webkitFullscreenElement){ window.__mtFsVid = id; return; }
+        if(mp.classList.contains('ad-showing')) return;            // wait past ads
+        if(v.paused || (v.currentTime || 0) < 1.5) return;         // wait until content is settled
+        // Click EXACTLY once per video and mark it done immediately — NEVER retry. Retrying
+        // thrashes: the fullscreen button toggles, so repeated clicks flip in/out of fullscreen
+        // and break playback. One click when content is settled is enough; a miss just means
+        // no fullscreen (harmless), and a new video re-arms via the videoId guard.
+        window.__mtFsVid = id;
         var b = document.querySelector('.ytp-fullscreen-button');
         if(b){ try { b.click(); } catch(e){} }
       } catch(e){}
