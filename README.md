@@ -4,15 +4,15 @@
 
 <h1 align="center">SmartTube for Mac</h1>
 
-<p align="center">
-  <img src="assets/screenshot-home.png" alt="SmartTube for Mac — native macOS YouTube front end" width="900">
-</p>
-
 A native macOS YouTube front end. It plays the **real** `youtube.com` watch page in a
 cropped WebView (so playback, HDR, DRM, and captions are exactly YouTube's own), while every
 other surface — recommendations, subscriptions, search, channels, Shorts, playlists, watch
 history — is rendered as a native SwiftUI app personalized to **your** account. There is no
 Google Cloud project and no OAuth: it reuses the YouTube login you already have in Firefox.
+
+<p align="center">
+  <img src="assets/screenshot-home.png" alt="SmartTube for Mac — native macOS YouTube front end" width="900">
+</p>
 
 > **Not affiliated with YouTube or Google** — nor with the [SmartTube](https://github.com/yuliskov/SmartTube) Android-TV client (unrelated project, similar name). A personal project. See [Legal](#legal).
 
