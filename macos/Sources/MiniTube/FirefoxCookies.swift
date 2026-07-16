@@ -10,6 +10,8 @@ import WebKit
 enum FirefoxCookies {
     /// Blocking (file copy + sqlite subprocess) — call off the main thread.
     static func load() -> [HTTPCookie] {
+        // MT_SIGNED_OUT=1 → run the player logged out (for clean, account-free screenshots).
+        if ProcessInfo.processInfo.environment["MT_SIGNED_OUT"] == "1" { return [] }
         guard let db = locateDB() else { return [] }
         let tmp = NSTemporaryDirectory() + "mt_wvck-\(UUID().uuidString).sqlite"
         guard copyWithSidecars(db, to: tmp) else { return [] }

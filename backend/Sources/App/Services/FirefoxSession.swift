@@ -12,6 +12,8 @@ enum FirefoxSession {
     /// Blocking (file copy + subprocess). Never call from an event loop — go
     /// through AuthState.session().
     static func load() -> Session? {
+        // MT_SIGNED_OUT=1 → force a logged-out session (clean screenshots; matches the WebView).
+        if ProcessInfo.processInfo.environment["MT_SIGNED_OUT"] == "1" { return nil }
         guard let db = locateDB() else { return nil }
         let tmp = NSTemporaryDirectory() + "mt_ffck-\(UUID().uuidString).sqlite"
         guard copyWithSidecars(db, to: tmp) else { return nil }
