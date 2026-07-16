@@ -1,4 +1,8 @@
-# SmartTube for Mac
+<p align="center">
+  <img src="assets/app-icon.png" alt="SmartTube for Mac" width="128">
+</p>
+
+<h1 align="center">SmartTube for Mac</h1>
 
 <p align="center">
   <img src="assets/screenshot-home.png" alt="SmartTube for Mac — native macOS YouTube front end" width="900">
