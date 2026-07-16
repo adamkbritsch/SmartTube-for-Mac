@@ -107,15 +107,15 @@ macos/       SwiftUI app (SwiftPM executable; AppKit bootstrap + WebKit player)
 backend/     Vapor package — InnerTube client, Firefox-session auth, feed/search/watch APIs
 extension/   Companion Firefox WebExtension (optional)
 patches/     SmartTube for Mac's patch to uBlock Origin (mt-shim.js)
-package.sh   Build + assemble YouTube.app + install
+package.sh   Build + assemble SmartTube.app + install
 ```
 
 ## Gatekeeper
 
 The app is **ad-hoc signed**, not notarized. Building locally with `./package.sh` and running
-from `/Applications` works without prompts. If you ever move a built `YouTube.app` between Macs,
+from `/Applications` works without prompts. If you ever move a built `SmartTube.app` between Macs,
 macOS will quarantine it — right-click → **Open**, or
-`xattr -dr com.apple.quarantine /Applications/YouTube.app`.
+`xattr -dr com.apple.quarantine /Applications/SmartTube.app`.
 
 ## Legal
 
