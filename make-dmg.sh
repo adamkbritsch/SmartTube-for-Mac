@@ -50,4 +50,4 @@ OSA
 sync
 hdiutil detach "$MOUNT" >/dev/null 2>&1 || diskutil unmount force "$MOUNT" >/dev/null 2>&1 || true
 hdiutil convert "$RW" -format UDZO -imagekey zlib-level=9 -o "$DMG" >/dev/null
-echo "→ $DMG ($(du -h "$DMG" | awk '{print $1}'))"
+echo "built: $DMG ($(du -h "$DMG" | awk '{print $1}'))"

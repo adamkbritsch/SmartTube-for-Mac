@@ -18,11 +18,11 @@ Google Cloud project and no OAuth: it reuses the YouTube login you already have 
 
 ## Download
 
-### **[⬇ Download the latest SmartTube.dmg](https://github.com/adamkbritsch/SmartTube-for-Mac/releases/latest)**
+### **[Download the latest SmartTube.dmg](https://github.com/adamkbritsch/SmartTube-for-Mac/releases/latest)**
 
 Open the `.dmg`, drag **SmartTube** onto **Applications**, then launch it.
 
-> **First launch only:** the app isn't notarized (that needs a paid Apple Developer account), so macOS Gatekeeper blocks it the first time. **Right-click SmartTube → Open**, then click **Open** in the dialog — once, and it's trusted from then on. (Equivalent: `xattr -dr com.apple.quarantine /Applications/SmartTube.app`.)
+> **First launch only:** the app isn't notarized (that needs a paid Apple Developer account), so macOS Gatekeeper blocks it the first time. **Right-click SmartTube and choose Open**, then click **Open** in the dialog — you only need to do this once, and it's trusted from then on. (Equivalent: `xattr -dr com.apple.quarantine /Applications/SmartTube.app`.)
 
 Needs an **Apple Silicon M3 or newer** Mac and **Firefox** signed into YouTube — see [Requirements](#requirements). Prefer to build from source? Jump to [Build & run](#build--run).
 
@@ -118,7 +118,7 @@ package.sh   Build + assemble SmartTube.app + install
 
 The app is **ad-hoc signed**, not notarized. Building locally with `./package.sh` and running
 from `/Applications` works without prompts. If you ever move a built `SmartTube.app` between Macs,
-macOS will quarantine it — right-click → **Open**, or
+macOS will quarantine it — right-click and choose **Open**, or run
 `xattr -dr com.apple.quarantine /Applications/SmartTube.app`.
 
 ## Legal
