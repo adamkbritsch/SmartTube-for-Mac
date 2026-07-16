@@ -12,6 +12,16 @@ Google Cloud project and no OAuth: it reuses the YouTube login you already have 
 
 > **Not affiliated with YouTube or Google** — nor with the [SmartTube](https://github.com/yuliskov/SmartTube) Android-TV client (unrelated project, similar name). A personal project. See [Legal](#legal).
 
+## Download
+
+### **[⬇ Download the latest SmartTube.dmg](https://github.com/adamkbritsch/SmartTube-for-Mac/releases/latest)**
+
+Open the `.dmg`, drag **SmartTube** onto **Applications**, then launch it.
+
+> **First launch only:** the app isn't notarized (that needs a paid Apple Developer account), so macOS Gatekeeper blocks it the first time. **Right-click SmartTube → Open**, then click **Open** in the dialog — once, and it's trusted from then on. (Equivalent: `xattr -dr com.apple.quarantine /Applications/SmartTube.app`.)
+
+Needs an **Apple Silicon M3 or newer** Mac and **Firefox** signed into YouTube — see [Requirements](#requirements). Prefer to build from source? Jump to [Build & run](#build--run).
+
 ## Features
 
 - **Real playback, native everything else.** The watch view is the genuine YouTube player

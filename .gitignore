@@ -12,3 +12,6 @@ extensions/
 
 # macOS cruft
 .DS_Store
+
+# Disk image build artifact (ships via GitHub Releases, not the repo)
+*.dmg
