@@ -266,6 +266,15 @@ struct WebPlayer: NSViewRepresentable {
                 let t = body["t"] ?? "?", end = body["end"] ?? "?"
                 let rs = body["rs"] ?? "?", paused = body["paused"] ?? "?", q = body["q"] ?? "?"
                 Coordinator.debugLog("buf t=\(t)s buffered-to=\(end)s readyState=\(rs) paused=\(paused) q=\(q)")
+            case "render":
+                if let e = body["err"] { Coordinator.debugLog("render ERR \(e)") }
+                else {
+                    let vr = body["vrect"] ?? "?", vw = body["vw"] ?? "?", inner = body["inner"] ?? "?"
+                    let f = body["filter"] ?? "?", op = body["opacity"] ?? "?", vis = body["vis"] ?? "?"
+                    let disp = body["disp"] ?? "?", tr = body["transform"] ?? "?", mb = body["mixblend"] ?? "?"
+                    let pbg = body["pbg"] ?? "?", ppos = body["ppos"] ?? "?", hit = body["hit"] ?? "?"
+                    Coordinator.debugLog("render vrect=\(vr) vpx=\(vw) inner=\(inner) filter=\(f) opacity=\(op) vis=\(vis) disp=\(disp) transform=\(tr) mixblend=\(mb) mpBg=\(pbg) mpPos=\(ppos) hit=\(hit)")
+                }
             default:
                 break
             }
@@ -534,8 +543,11 @@ struct WebPlayer: NSViewRepresentable {
         if(!document.getElementById('mt-enh-css')){
           var st = document.createElement('style'); st.id = 'mt-enh-css';
           st.textContent =
-            'video.html5-main-video{ will-change:filter; transform:translateZ(0); backface-visibility:hidden; }'
-            + '#movie_player.mt-enh video.html5-main-video{ filter:url(#mt-sharp) contrast(var(--mt-c,1)) saturate(var(--mt-s,1)); }';
+            // Layer-promotion (translateZ/will-change) is applied ONLY together with the filter,
+            // never unconditionally: forcing a compositing layer on the bare 4K video makes WebKit
+            // (macOS 26) decode it but composite BLACK. With no filter active the video keeps its
+            // default rendering path and paints normally.
+            '#movie_player.mt-enh video.html5-main-video{ filter:url(#mt-sharp) contrast(var(--mt-c,1)) saturate(var(--mt-s,1)); will-change:filter; transform:translateZ(0); backface-visibility:hidden; }';
           (document.head||document.documentElement).appendChild(st);
         }
       }
@@ -717,6 +729,21 @@ struct WebPlayer: NSViewRepresentable {
         var p = document.getElementById('movie_player');
         var q = ''; try { q = (p && p.getPlaybackQuality) ? p.getPlaybackQuality() : ''; } catch(e){}
         post({action:'buf', t: Math.round(v.currentTime), end: Math.round(end), rs: v.readyState, paused: v.paused, q: q});
+        // Rendering diagnostic: WHY the player can show black while the media decodes.
+        try {
+          var cs = getComputedStyle(v); var r = v.getBoundingClientRect();
+          var cx = Math.round(r.left + r.width/2), cy = Math.round(r.top + r.height/2);
+          var hit = document.elementFromPoint(cx, cy);
+          var pcs = p ? getComputedStyle(p) : null;
+          post({action:'render',
+            vrect: Math.round(r.left)+','+Math.round(r.top)+' '+Math.round(r.width)+'x'+Math.round(r.height),
+            vw: v.videoWidth+'x'+v.videoHeight,
+            filter: cs.filter, opacity: cs.opacity, vis: cs.visibility, disp: cs.display,
+            transform: cs.transform, mixblend: cs.mixBlendMode,
+            pbg: pcs? pcs.backgroundColor : '', ppos: pcs? pcs.position : '',
+            inner: window.innerWidth+'x'+window.innerHeight,
+            hit: hit ? (hit.tagName+'.'+String(hit.className||'').slice(0,36)) : 'none'});
+        } catch(e){ post({action:'render', err: String(e)}); }
       }, 3000);
     })();
     """

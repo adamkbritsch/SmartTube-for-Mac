@@ -1,6 +1,6 @@
 {
   "adBlock" : true,
-  "autoFullscreen" : false,
+  "autoFullscreen" : true,
   "deArrow" : true,
   "enhance" : "subtle",
   "maxResolution" : true,
