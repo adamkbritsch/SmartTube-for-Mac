@@ -1,5 +1,9 @@
 # SmartTube for Mac
 
+<p align="center">
+  <img src="assets/screenshot-home.png" alt="SmartTube for Mac — native macOS YouTube front end" width="900">
+</p>
+
 A native macOS YouTube front end. It plays the **real** `youtube.com` watch page in a
 cropped WebView (so playback, HDR, DRM, and captions are exactly YouTube's own), while every
 other surface — recommendations, subscriptions, search, channels, Shorts, playlists, watch
@@ -24,6 +28,18 @@ Google Cloud project and no OAuth: it reuses the YouTube login you already have 
 - **Extras:** a GPU "Enhance" detail-sharpen, a GPU-saver mode that automatically sheds load
   when another GPU-heavy app is running, a max-resolution pin, theater mode, and an HDR
   discovery shelf.
+
+## Screenshots
+
+<p align="center">
+  <img src="assets/screenshot-hdr.png" alt="HDR discovery feed" width="900"><br>
+  <em>The HDR shelf — genuine 4K/HDR content, decoded through the system EDR pipeline.</em>
+</p>
+
+<p align="center">
+  <img src="assets/screenshot-watch.png" alt="Watch page" width="900"><br>
+  <em>The watch page — the real YouTube player cropped to just the video, with a native up-next rail.</em>
+</p>
 
 ## Requirements
 
