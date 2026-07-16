@@ -24,6 +24,11 @@ struct WebPlayer: NSViewRepresentable {
     var onTheater: () -> Void = {}                                     // YouTube's own theater button was clicked
     var onMarkWatched: (String) -> Void = { _ in }                    // watched past threshold → log to YouTube history
 
+    /// Whether to wire the uBO/SponsorBlock WKWebExtension into the player WebView. OFF by default:
+    /// the extension currently hangs the watch-page load on this WebKit (see makeNSView). Native
+    /// blockers cover the gap. Set MT_PLAYER_EXT=1 to opt back in and retest once WebKit is fixed.
+    static let playerUsesExtension = ProcessInfo.processInfo.environment["MT_PLAYER_EXT"] == "1"
+
     func makeNSView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
         config.mediaTypesRequiringUserActionForPlayback = []
@@ -32,7 +37,16 @@ struct WebPlayer: NSViewRepresentable {
         // content scripts into WebViews on the controller's OWN data store. Attach the controller
         // and use its store together; fall back to the standalone cookie-less store when
         // extensions are unavailable (macOS < 15.4).
-        if #available(macOS 15.4, *), let controller = UBlockLoader.shared.controller {
+        // The uBO/SponsorBlock WKWebExtension deterministically HANGS this player's main-frame
+        // navigation to youtube.com/watch — the provisional load never commits, so the video never
+        // appears (bisected: Tests A/B/D hang with the controller+store attached; Test C, detached,
+        // loads + plays 4K normally). The extension loads without errors, so this is a macOS/WebKit
+        // regression in main-frame handling, not our code. The app's NATIVE stack fully covers the
+        // gap: in-page adBlockJS + cancelPlayback kill ads, the JS SponsorBlock re-arms automatically
+        // (nativeSB=false below), DeArrow comes from the backend — and the player crops YouTube's
+        // chrome away, so uBO's cosmetic filtering was invisible here regardless. Opt back in with
+        // MT_PLAYER_EXT=1 to retest once WebKit fixes this.
+        if #available(macOS 15.4, *), WebPlayer.playerUsesExtension, let controller = UBlockLoader.shared.controller {
             config.websiteDataStore = UBlockLoader.shared.dataStore ?? .player
             config.webExtensionController = controller
         } else {
@@ -62,7 +76,7 @@ struct WebPlayer: NSViewRepresentable {
         // Register this WebView as the extension host tab BEFORE loading, so a content
         // script's runtime.sendMessage resolves (SponsorBlock's skip/config/segment fetch
         // all route through the background page — without a tab it fails "Tab not found").
-        if #available(macOS 15.4, *) { UBlockLoader.shared.attachPlayer(webView) }
+        if #available(macOS 15.4, *), WebPlayer.playerUsesExtension { UBlockLoader.shared.attachPlayer(webView) }
         // Host-driven ad skip: dismiss adSlots video ads via the player's cancelPlayback() (the
         // only reliable path since stripping adSlots from the response would freeze forward seeks).
         context.coordinator.startAdSkip(webView)
@@ -90,8 +104,11 @@ struct WebPlayer: NSViewRepresentable {
     /// The window.__MT flag object the injected loops read. Includes nativeSB so the JS
     /// SponsorBlock stands down when the real SponsorBlock extension is loaded (no double-skip).
     private var flagsJS: String {
+        // nativeSB stands the JS SponsorBlock down ONLY when the real extension is actually wired
+        // into this player. Since the player detaches the extension (see makeNSView), this is false,
+        // so the JS SponsorBlock runs and community segments still skip.
         var nativeSB = false
-        if #available(macOS 15.4, *) { nativeSB = UBlockLoader.shared.contexts["SponsorBlock"] != nil }
+        if #available(macOS 15.4, *) { nativeSB = WebPlayer.playerUsesExtension && UBlockLoader.shared.contexts["SponsorBlock"] != nil }
         return "window.__MT={adBlock:\(adBlock),sponsorBlock:\(sponsorBlock),maxResolution:\(maxResolution),enhance:'\(enhance)',playbackSpeed:\(playbackSpeed),autoFullscreen:\(autoFullscreen),nativeSB:\(nativeSB),gpuSaver:\(gpuSaver),debug:\(MTDebug.enabled)};"
     }
 
@@ -163,14 +180,41 @@ struct WebPlayer: NSViewRepresentable {
         func load(_ videoId: String, into webView: WKWebView) {
             desiredVideo = videoId; desiredWebView = webView
             guard signInReady, loaded != videoId,
-                  let url = URL(string: "https://www.youtube.com/watch?v=\(videoId)") else { return }
+                  let url = URL(string: "https://www.youtube.com/watch?v=\(videoId)") else {
+                // Only the still-waiting-on-sign-in case is interesting; skip the every-render
+                // re-calls after the video is already loaded (they'd flood the debug log).
+                if loaded != videoId { MTDebug.log("[load] waiting v=\(videoId) signInReady=\(signInReady)") }
+                return
+            }
             loaded = videoId
+            MTDebug.log("[load] firing v=\(videoId)")
             webView.load(URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData))
         }
 
         func signInDidComplete() {
             signInReady = true
+            MTDebug.log("[signin] complete; desiredVideo=\(desiredVideo ?? "nil")")
             if let v = desiredVideo, let w = desiredWebView { load(v, into: w) }
+        }
+
+        // Navigation diagnostics (no-op unless /tmp/mt-debug present) — surface silent load failures.
+        func webView(_ w: WKWebView, didStartProvisionalNavigation n: WKNavigation!) {
+            MTDebug.log("[nav] start \(w.url?.absoluteString ?? "nil")")
+        }
+        func webView(_ w: WKWebView, didCommit n: WKNavigation!) {
+            MTDebug.log("[nav] commit \(w.url?.absoluteString ?? "nil")")
+        }
+        func webView(_ w: WKWebView, didReceiveServerRedirectForProvisionalNavigation n: WKNavigation!) {
+            MTDebug.log("[nav] redirect \(w.url?.absoluteString ?? "nil")")
+        }
+        func webView(_ w: WKWebView, didFinish n: WKNavigation!) {
+            MTDebug.log("[nav] finish \(w.url?.absoluteString ?? "nil")")
+        }
+        func webView(_ w: WKWebView, didFailProvisionalNavigation n: WKNavigation!, withError e: Error) {
+            MTDebug.log("[nav] FAIL-provisional \(e.localizedDescription)")
+        }
+        func webView(_ w: WKWebView, didFail n: WKNavigation!, withError e: Error) {
+            MTDebug.log("[nav] FAIL \(e.localizedDescription)")
         }
 
         // Flags now ride in as the FIRST documentStart user script (rebuilt on every
