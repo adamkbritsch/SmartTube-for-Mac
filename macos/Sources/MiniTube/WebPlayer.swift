@@ -340,6 +340,10 @@ struct WebPlayer: NSViewRepresentable {
                         Coordinator.debugLog("native wvFrame=\(Int(wv.frame.width))x\(Int(wv.frame.height))@\(Int(wv.frame.minX)),\(Int(wv.frame.minY)) window=\(winName) \(Int(wf.width))x\(Int(wf.height)) chain=\(chain.joined(separator: " > "))")
                     }
                 }
+            case "admute":
+                let on = (body["on"] as? Bool) ?? false
+                let why = (body["why"] as? String) ?? (on ? "ad-detected" : "")
+                Coordinator.debugLog("admute \(on ? "MUTE" : "restore") \(why)")
             default:
                 break
             }
@@ -476,18 +480,40 @@ struct WebPlayer: NSViewRepresentable {
     """
 
     /// One host-driven ad-skip tick (see Coordinator.startAdSkip). Runs ~2x/sec; a near-no-op
-    /// unless the player is mid-ad. cancelPlayback() dismisses the ad + resumes content; mute and
+    /// unless the player is mid-ad. cancelPlayback() dismisses the ad + resumes content; muting and
     /// the Skip-button click are belt-and-suspenders. Re-checks the live ad-block flag so the
     /// toggle governs it. NEVER touches the player response → forward seeking is unaffected.
+    ///
+    /// CRITICAL: muting is REVERSIBLE. We stash the pre-ad muted state in window.__mtAdMute and
+    /// restore it the instant `.ad-showing` clears. Without this, if cancelPlayback() fails to kill
+    /// the ad (notably when the app is inactive — a background window stole focus — so host-eval
+    /// user-activation is weak), the ad plays out muted and content resumes on the SAME <video>
+    /// element with `.muted` still latched behind YouTube's UI → video stuck permanently silent
+    /// (the volume icon shows unmuted; the slider never clears element-level muted). [[the-ad-mute-latch-bug]]
     static let adSkipTick = """
     (function(){
       try {
-        if(!(window.__MT && window.__MT.adBlock)) return;
+        var v = document.querySelector('video');
         var mp = document.getElementById('movie_player');
-        if(!mp || !mp.classList || !mp.classList.contains('ad-showing')) return;
-        var v = document.querySelector('video'); if(v) v.muted = true;
-        if(typeof mp.cancelPlayback === 'function'){ try { mp.cancelPlayback(); } catch(e){} }
-        try { mp.playVideo && mp.playVideo(); } catch(e){}
+        var adShowing = !!(mp && mp.classList && mp.classList.contains('ad-showing'));
+        if(!(window.__MT && window.__MT.adBlock)){
+          // Ad-block turned off mid-ad: undo any mute WE applied, then stand down.
+          if(window.__mtAdMute){ if(v) v.muted = window.__mtAdMute.was; window.__mtAdMute = null;
+            if(window.__MT && window.__MT.debug){ try { window.webkit.messageHandlers.minitube.postMessage({action:'admute', on:false, why:'adblock-off'}); } catch(e){} } }
+          return;
+        }
+        if(!adShowing){
+          // Not (or no longer) an ad → restore the pre-ad muted state exactly once.
+          if(window.__mtAdMute){ if(v) v.muted = window.__mtAdMute.was; window.__mtAdMute = null;
+            if(window.__MT.debug){ try { window.webkit.messageHandlers.minitube.postMessage({action:'admute', on:false, why:'ad-cleared'}); } catch(e){} } }
+          return;
+        }
+        // Mid-ad: remember the real muted state ONCE, then mute + try to dismiss.
+        if(!window.__mtAdMute){ window.__mtAdMute = { was: v ? v.muted : false };
+          if(window.__MT.debug){ try { window.webkit.messageHandlers.minitube.postMessage({action:'admute', on:true, was: window.__mtAdMute.was}); } catch(e){} } }
+        if(v) v.muted = true;
+        if(mp && typeof mp.cancelPlayback === 'function'){ try { mp.cancelPlayback(); } catch(e){} }
+        try { mp && mp.playVideo && mp.playVideo(); } catch(e){}
         var sk = document.querySelector('.ytp-ad-skip-button, .ytp-skip-ad-button, .ytp-ad-skip-button-modern, .ytp-ad-skip-button-container button');
         if(sk){ try { sk.click(); } catch(e){} }
       } catch(e){}
