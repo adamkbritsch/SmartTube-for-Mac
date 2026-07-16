@@ -8,13 +8,47 @@ import AppKit
 /// forwarding every wheel event loses nothing. Fixes: hovering the video froze scrolling.
 final class ScrollThroughWebView: WKWebView {
     override func scrollWheel(with event: NSEvent) {
-        // Nearest NSScrollView ancestor — SwiftUI's ScrollView is backed by one.
+        // Nearest NSScrollView ancestor — SwiftUI's ScrollView is backed by one
+        // (HostingScrollView, verified in the live superview chain).
         var v: NSView? = superview
         while let cur = v {
             if let sv = cur as? NSScrollView { sv.scrollWheel(with: event); return }
             v = cur.superview
         }
-        nextResponder?.scrollWheel(with: event)
+        // No scroll view above us (e.g. reparented into WebKit's fullscreen window):
+        // let the web content handle the wheel normally.
+        super.scrollWheel(with: event)
+    }
+}
+
+/// Hosts the player web view. SwiftUI sizes THIS container; the web view fills it via
+/// layout(). WebKit REPARENTS the web view into its own WebCoreFullScreenWindow for
+/// YouTube's element fullscreen — when makeNSView returned the web view directly,
+/// SwiftUI kept setting the reparented web view's frame back to the embedded size on
+/// every layout pass, shrinking the fullscreen video to a tiny rectangle in the
+/// lower-left of a black screen (verified with the debug render/native probes:
+/// wvFrame 1728x1084 → 654x368 while still inside WebCoreFullScreenWindow). SwiftUI
+/// only ever touches the container, so the fullscreen web view keeps the frame WebKit
+/// gives it; on exit WebKit restores the web view here and layout() re-fills it.
+final class PlayerContainer: NSView {
+    let webView: ScrollThroughWebView
+    init(webView: ScrollThroughWebView) {
+        self.webView = webView
+        super.init(frame: .zero)
+        addSubview(webView)
+    }
+    required init?(coder: NSCoder) { fatalError("PlayerContainer is code-only") }
+
+    private func fillWebView() {
+        // Never touch the web view while WebKit has it borrowed for fullscreen.
+        if webView.superview == self { webView.frame = bounds }
+    }
+    override func layout() { super.layout(); fillWebView() }
+    override func setFrameSize(_ newSize: NSSize) { super.setFrameSize(newSize); fillWebView() }
+    // WebKit re-adds the web view here when fullscreen exits — snap it back to our size.
+    override func didAddSubview(_ subview: NSView) {
+        super.didAddSubview(subview)
+        if subview === webView { fillWebView(); needsLayout = true }
     }
 }
 
@@ -46,7 +80,7 @@ struct WebPlayer: NSViewRepresentable {
     /// blockers cover the gap. Set MT_PLAYER_EXT=1 to opt back in and retest once WebKit is fixed.
     static let playerUsesExtension = ProcessInfo.processInfo.environment["MT_PLAYER_EXT"] == "1"
 
-    func makeNSView(context: Context) -> WKWebView {
+    func makeNSView(context: Context) -> PlayerContainer {
         let config = WKWebViewConfiguration()
         config.mediaTypesRequiringUserActionForPlayback = []
         config.preferences.isElementFullscreenEnabled = true       // YouTube's own fullscreen button
@@ -115,7 +149,7 @@ struct WebPlayer: NSViewRepresentable {
                 }
             }
         }
-        return webView
+        return PlayerContainer(webView: webView)
     }
 
     /// The window.__MT flag object the injected loops read. Includes nativeSB so the JS
@@ -129,7 +163,8 @@ struct WebPlayer: NSViewRepresentable {
         return "window.__MT={adBlock:\(adBlock),sponsorBlock:\(sponsorBlock),maxResolution:\(maxResolution),enhance:'\(enhance)',playbackSpeed:\(playbackSpeed),autoFullscreen:\(autoFullscreen),nativeSB:\(nativeSB),gpuSaver:\(gpuSaver),debug:\(MTDebug.enabled)};"
     }
 
-    func updateNSView(_ webView: WKWebView, context: Context) {
+    func updateNSView(_ container: PlayerContainer, context: Context) {
+        let webView = container.webView
         context.coordinator.load(videoId, into: webView)
         // Only act when the flags actually changed — updateNSView fires on every parent
         // re-render (incl. the player's own readouts), which used to re-eval JS in a loop.
@@ -153,10 +188,10 @@ struct WebPlayer: NSViewRepresentable {
     }
 
     // Stop audio the instant this player's view is removed.
-    static func dismantleNSView(_ nsView: WKWebView, coordinator: Coordinator) {
+    static func dismantleNSView(_ container: PlayerContainer, coordinator: Coordinator) {
         coordinator.stopAdSkip()
-        nsView.pauseAllMediaPlayback(completionHandler: nil)
-        nsView.loadHTMLString("", baseURL: nil)
+        container.webView.pauseAllMediaPlayback(completionHandler: nil)
+        container.webView.loadHTMLString("", baseURL: nil)
     }
 
     func makeCoordinator() -> Coordinator { Coordinator(onFullscreen: onFullscreen, onEnhanceInfo: onEnhanceInfo, onEnded: onEnded, onTheater: onTheater, onMarkWatched: onMarkWatched, adBlock: adBlock, sponsorBlock: sponsorBlock) }
@@ -290,7 +325,20 @@ struct WebPlayer: NSViewRepresentable {
                     let f = body["filter"] ?? "?", op = body["opacity"] ?? "?", vis = body["vis"] ?? "?"
                     let disp = body["disp"] ?? "?", tr = body["transform"] ?? "?", mb = body["mixblend"] ?? "?"
                     let pbg = body["pbg"] ?? "?", ppos = body["ppos"] ?? "?", hit = body["hit"] ?? "?"
-                    Coordinator.debugLog("render vrect=\(vr) vpx=\(vw) inner=\(inner) filter=\(f) opacity=\(op) vis=\(vis) disp=\(disp) transform=\(tr) mixblend=\(mb) mpBg=\(pbg) mpPos=\(ppos) hit=\(hit)")
+                    let fs = body["fs"] ?? "?"
+                    Coordinator.debugLog("render fs=\(fs) vrect=\(vr) vpx=\(vw) inner=\(inner) filter=\(f) opacity=\(op) vis=\(vis) disp=\(disp) transform=\(tr) mixblend=\(mb) mpBg=\(pbg) mpPos=\(ppos) hit=\(hit)")
+                    // Native side of the same snapshot: the web view's actual frame, which
+                    // window hosts it (WebKit reparents it for element fullscreen), and the
+                    // superview chain (is there an NSScrollView for scroll forwarding?).
+                    if let wv = adSkipWebView {
+                        var chain: [String] = []
+                        var v: NSView? = wv.superview
+                        while let cur = v, chain.count < 14 { chain.append(String(describing: type(of: cur))); v = cur.superview }
+                        let win = wv.window
+                        let wf = win?.frame ?? .zero
+                        let winName = win.map { String(describing: type(of: $0)) } ?? "nil"
+                        Coordinator.debugLog("native wvFrame=\(Int(wv.frame.width))x\(Int(wv.frame.height))@\(Int(wv.frame.minX)),\(Int(wv.frame.minY)) window=\(winName) \(Int(wf.width))x\(Int(wf.height)) chain=\(chain.joined(separator: " > "))")
+                    }
                 }
             default:
                 break
@@ -753,6 +801,7 @@ struct WebPlayer: NSViewRepresentable {
           var hit = document.elementFromPoint(cx, cy);
           var pcs = p ? getComputedStyle(p) : null;
           post({action:'render',
+            fs: (document.fullscreenElement || document.webkitFullscreenElement) ? 1 : 0,
             vrect: Math.round(r.left)+','+Math.round(r.top)+' '+Math.round(r.width)+'x'+Math.round(r.height),
             vw: v.videoWidth+'x'+v.videoHeight,
             filter: cs.filter, opacity: cs.opacity, vis: cs.visibility, disp: cs.display,
