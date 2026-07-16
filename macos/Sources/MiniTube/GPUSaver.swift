@@ -30,7 +30,7 @@ final class GPUSaver: ObservableObject {
         }
         if heavy != active {
             active = heavy
-            print("[YouTube] GPU saver \(heavy ? "ON" : "off") (Visionary \(heavy ? "running" : "gone"))")
+            print("[SmartTube] GPU saver \(heavy ? "ON" : "off") (Visionary \(heavy ? "running" : "gone"))")
         }
     }
 }

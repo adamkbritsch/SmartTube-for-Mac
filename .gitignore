@@ -4,7 +4,7 @@
 *.swiftmodule
 
 # Built app bundle (produced by ./package.sh)
-YouTube.app/
+*.app/
 
 # Vendored extensions — fetched from their official releases at build time
 # (see package.sh + THIRD-PARTY.md). Only the patch source in patches/ is tracked.

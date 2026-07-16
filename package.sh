@@ -1,11 +1,11 @@
 #!/bin/bash
 # Package MiniTube's SwiftUI front-end + Vapor backend into a real, double-clickable
-# YouTube.app (icon, Dock presence, self-launching backend) and install to /Applications.
+# SmartTube.app (icon, Dock presence, self-launching backend) and install to /Applications.
 set -euo pipefail
 
 # Repo root = the directory this script lives in (portable; no hardcoded path).
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-APP="$REPO/YouTube.app"
+APP="$REPO/SmartTube.app"
 # Bundle id is overridable so forks don't collide; default is generic.
 BUNDLE_ID="${MT_BUNDLE_ID:-com.minitube.youtube}"
 
@@ -61,9 +61,9 @@ SRV_BIN="$REPO/backend/.build/release/App"
 echo "==> assembling $APP"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/Server"
-cp "$APP_BIN" "$APP/Contents/MacOS/YouTube"
+cp "$APP_BIN" "$APP/Contents/MacOS/SmartTube"
 cp "$SRV_BIN" "$APP/Contents/Resources/Server/App"   # backend auto-spawned by the app
-cp "$REPO/YouTube.icns" "$APP/Contents/Resources/YouTube.icns"
+cp "$REPO/SmartTube.icns" "$APP/Contents/Resources/SmartTube.icns"
 cp "$REPO/smarttube-logo.png" "$APP/Contents/Resources/smarttube-logo.png"   # in-app header wordmark
 cp -R "$EXT/ubo" "$APP/Contents/Resources/uBO"                   # real uBlock Origin (scriptlets/cosmetics)
 cp -R "$EXT/sponsorblock" "$APP/Contents/Resources/SponsorBlock" # real SponsorBlock
@@ -74,11 +74,11 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>CFBundleName</key><string>YouTube</string>
-  <key>CFBundleDisplayName</key><string>YouTube</string>
+  <key>CFBundleName</key><string>SmartTube</string>
+  <key>CFBundleDisplayName</key><string>SmartTube</string>
   <key>CFBundleIdentifier</key><string>$BUNDLE_ID</string>
-  <key>CFBundleExecutable</key><string>YouTube</string>
-  <key>CFBundleIconFile</key><string>YouTube</string>
+  <key>CFBundleExecutable</key><string>SmartTube</string>
+  <key>CFBundleIconFile</key><string>SmartTube</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>1.0</string>
   <key>CFBundleVersion</key><string>1</string>
@@ -96,20 +96,24 @@ codesign --force --deep --sign - "$APP"
 echo "==> installing to /Applications"
 # Never swap the bundle out from under a running instance (corrupts the live image
 # and leaves an old process serving a deleted bundle).
-if pgrep -f "/Applications/YouTube.app/Contents/MacOS/YouTube" >/dev/null 2>&1; then
-  echo "==> quitting running YouTube.app first"
-  osascript -e 'tell application "YouTube" to quit' 2>/dev/null || true
+if pgrep -f "/Applications/SmartTube.app/Contents/MacOS/SmartTube" >/dev/null 2>&1; then
+  echo "==> quitting running SmartTube.app first"
+  osascript -e 'tell application "SmartTube" to quit' 2>/dev/null || true
   for _ in $(seq 1 20); do
-    pgrep -f "/Applications/YouTube.app/Contents/MacOS/YouTube" >/dev/null 2>&1 || break
+    pgrep -f "/Applications/SmartTube.app/Contents/MacOS/SmartTube" >/dev/null 2>&1 || break
     sleep 0.5
   done
-  pkill -9 -f "/Applications/YouTube.app/Contents/MacOS/YouTube" 2>/dev/null || true
+  pkill -9 -f "/Applications/SmartTube.app/Contents/MacOS/SmartTube" 2>/dev/null || true
 fi
 LSREG=/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister
-"$LSREG" -u "/Applications/YouTube.app" 2>/dev/null || true   # drop the OLD registration first (avoids stale icon cache)
+# One-time migration from the pre-rename "YouTube.app" — kill it and clear the old install/registration.
+pkill -9 -f "/Applications/YouTube.app/Contents/MacOS/YouTube" 2>/dev/null || true
+"$LSREG" -u "/Applications/YouTube.app" 2>/dev/null || true
 rm -rf "/Applications/YouTube.app"
-cp -R "$APP" "/Applications/YouTube.app"
-touch "/Applications/YouTube.app"
-"$LSREG" -f "/Applications/YouTube.app" 2>/dev/null || true
+"$LSREG" -u "/Applications/SmartTube.app" 2>/dev/null || true   # drop the OLD registration first (avoids stale icon cache)
+rm -rf "/Applications/SmartTube.app"
+cp -R "$APP" "/Applications/SmartTube.app"
+touch "/Applications/SmartTube.app"
+"$LSREG" -f "/Applications/SmartTube.app" 2>/dev/null || true
 
-echo "==> done → /Applications/YouTube.app"
+echo "==> done → /Applications/SmartTube.app"

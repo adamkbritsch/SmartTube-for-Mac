@@ -44,7 +44,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             backing: .buffered,
             defer: false
         )
-        window.title = "YouTube"
+        window.title = "SmartTube"
         // Native unified/transparent titlebar so the dark app reads as one seamless surface.
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true

@@ -43,7 +43,7 @@ final class BackendManager {
         Task {
             await reapOrphanedBackend()
             if await isUp() {
-                print("[YouTube] backend already running — reusing it")
+                print("[SmartTube] backend already running — reusing it")
                 adoptRunningBackend()   // record it so a future crash-leak is reapable
                 return
             }
@@ -63,7 +63,7 @@ final class BackendManager {
 
         // Owner still alive → the backend belongs to a live sibling instance. Leave both alone.
         if owner > 0, kill(owner, 0) == 0, owner != ProcessInfo.processInfo.processIdentifier {
-            print("[YouTube] backend owned by live instance \(owner) — not reaping")
+            print("[SmartTube] backend owned by live instance \(owner) — not reaping")
             return
         }
         // Owner dead (crash-leak). Reap the backend if it's really ours and alive.
@@ -71,7 +71,7 @@ final class BackendManager {
         guard pid > 0, kill(pid, 0) == 0,
               pidExecutablePath(pid) == BackendManager.backendBinary else { return }
 
-        print("[YouTube] reaping orphaned backend (pid \(pid))")
+        print("[SmartTube] reaping orphaned backend (pid \(pid))")
         kill(pid, SIGTERM)
         for _ in 0..<20 {                       // up to ~2s for it to release the port
             if kill(pid, 0) != 0 { return }
@@ -91,7 +91,7 @@ final class BackendManager {
         }
         guard let bin = BackendManager.backendBinary, let pid = findBackendPid(binary: bin) else { return }
         writePidfile(backend: pid)
-        print("[YouTube] adopted running backend (pid \(pid))")
+        print("[SmartTube] adopted running backend (pid \(pid))")
     }
 
     /// Locate a live process running our backend binary (bounded scan of all pids).
@@ -118,7 +118,7 @@ final class BackendManager {
 
     private func spawn() {
         guard let bin = BackendManager.backendBinary else {
-            print("[YouTube] backend binary not found — build it (swift build -c release) or repackage")
+            print("[SmartTube] backend binary not found — build it (swift build -c release) or repackage")
             return
         }
         let p = Process()
@@ -135,9 +135,9 @@ final class BackendManager {
             try p.run()
             process = p
             writePidfile(backend: p.processIdentifier)
-            print("[YouTube] backend spawned (pid \(p.processIdentifier)) from \(bin), log: \(logURL.path)")
+            print("[SmartTube] backend spawned (pid \(p.processIdentifier)) from \(bin), log: \(logURL.path)")
         } catch {
-            print("[YouTube] failed to spawn backend: \(error)")
+            print("[SmartTube] failed to spawn backend: \(error)")
         }
     }
 
