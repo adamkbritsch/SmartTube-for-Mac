@@ -124,7 +124,7 @@ private struct PlaybackReadout: View {
         HStack(spacing: 10) {
             if !resLabel.isEmpty {
                 Text(resLabel).font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
-                    .help("Playing resolution — sharpen strength adapts to this (off at 4K)")
+                    .help("Playing resolution")
             }
             if playback.hdr {
                 Text("HDR").font(.system(size: 10, weight: .heavy))
@@ -138,68 +138,15 @@ private struct PlaybackReadout: View {
         }
     }
 
-    // Shows the decoded height, and "· off" when the adaptive sharpen is inactive because the
-    // swatch is Off. At 4K+ the Enhance control is hidden entirely, so no "· off" suffix there.
+    // Decoded height only — Enhance state is no longer surfaced here (it lives in Settings).
     private var resLabel: String {
         let h = playback.height
         guard h > 0 else { return "" }
-        let name: String
         switch h {
-        case 4320...: name = "8K"
-        case 2160...: name = "4K"
-        default:      name = "\(h)p"
+        case 4320...: return "8K"
+        case 2160...: return "4K"
+        default:      return "\(h)p"
         }
-        if h >= 2160 { return name }   // no sharpen exists at 4K+ → don't imply one is "off"
-        return playback.enhanceActive ? name : "\(name) · off"
-    }
-}
-
-/// The Enhance (spatial sharpen) control + its GPU-saver chip. Isolated so it re-renders on the
-/// resolution readout — which lets it HIDE ENTIRELY at 4K+, where the sharpen filter is always
-/// off (feConvolveMatrix amount 0). Showing inert Off/Subtle/Sharper buttons there is clutter,
-/// so at ≥2160p this renders nothing and the bar collapses to just the resolution + quality controls.
-private struct EnhanceControls: View {
-    @EnvironmentObject var store: Store
-    @ObservedObject var playback: PlaybackState
-    @ObservedObject var gpuSaver = GPUSaver.shared
-    private var accent: Color { Color(red: 0.24, green: 0.65, blue: 1) }
-
-    var body: some View {
-        // height 0 = still unknown (show); ≥2160 = confirmed 4K/8K → sharpen does nothing → hide.
-        if playback.height < 2160 {
-            HStack(spacing: 10) {
-                Image(systemName: "wand.and.stars").font(.system(size: 12)).foregroundStyle(.secondary)
-                Text("Enhance").font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary)
-                HStack(spacing: 2) {
-                    seg("Off", "off"); seg("Subtle", "subtle"); seg("Sharper", "sharper")
-                }
-                .padding(2)
-                .background(Capsule().fill(Color.primary.opacity(0.08)))
-
-                if gpuSaver.active {
-                    HStack(spacing: 4) {
-                        Image(systemName: "leaf.fill").font(.system(size: 9))
-                        Text("GPU saver").font(.system(size: 10, weight: .semibold))
-                    }
-                    .padding(.horizontal, 7).frame(height: 18)
-                    .background(Capsule().fill(Color.green.opacity(0.18)))
-                    .foregroundStyle(.green)
-                    .help("Visionary is using the GPU — the Enhance sharpen filter is off to keep playback smooth. Resolution/HDR are unaffected (Max Quality still forces the best rendition; 4K/HDR decode runs on the hardware media engine, not the GPU Visionary needs). Restores automatically when Visionary quits.")
-                }
-            }
-        }
-    }
-
-    private func seg(_ label: String, _ value: String) -> some View {
-        let active = store.settings.enhance == value
-        return Button { store.setEnhance(value) } label: {
-            Text(label).font(.system(size: 12, weight: .medium))
-                .padding(.horizontal, 12).frame(height: 26)
-                .background(Capsule().fill(active ? AnyShapeStyle(accent) : AnyShapeStyle(Color.clear)))
-                .foregroundStyle(active ? AnyShapeStyle(Color.white) : AnyShapeStyle(Color.secondary))
-        }
-        .buttonStyle(.plain)
-        .help("GPU detail-sharpen (spatial, not neural)")
     }
 }
 
@@ -270,7 +217,7 @@ struct WatchPage: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     playerSlot
-                    enhanceBar
+                    playerBar
 
                     Text(info?.title ?? "Loading…")
                         .font(.title2.bold()).lineLimit(3).textSelection(.enabled)
@@ -331,13 +278,11 @@ struct WatchPage: View {
         if likeWritesInFlight == 0 { likeState = i.likeStatus ?? 0 }
     }
 
-    // Picture-quality controls (max resolution + GPU "Enhance" sharpen) right under the player.
-    // The Enhance control + GPU-saver chip are isolated in EnhanceControls, which hides itself at
-    // 4K+ (nothing to sharpen). Per-second readouts likewise live in their own PlaybackReadout —
-    // WatchPage doesn't re-render on either.
-    private var enhanceBar: some View {
+    // Under-player bar: live resolution/HDR readout, plus theater + max-quality quick toggles.
+    // (Enhance moved to Settings — it isn't shown here.) The readout is isolated in its own
+    // PlaybackReadout so WatchPage doesn't re-render on the per-second ticks.
+    private var playerBar: some View {
         HStack(spacing: 10) {
-            EnhanceControls(playback: store.playback)
             PlaybackReadout(playback: store.playback)
 
             Spacer(minLength: 8)
