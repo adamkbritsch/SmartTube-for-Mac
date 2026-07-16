@@ -17,6 +17,7 @@ struct WebPlayer: NSViewRepresentable {
     var enhance: String = "subtle"      // GPU sharpen preset: "off" | "subtle" | "sharper"
     var gpuSaver: Bool = false          // Visionary running → shed the Enhance filter (resolution unaffected)
     var playbackSpeed: Double = 1.0     // player rate (1 / 1.25 / 1.5 / 1.75 / 2)
+    var autoFullscreen: Bool = false    // auto-enter YouTube fullscreen when a video starts
     var onFullscreen: () -> Void = {}
     var onEnhanceInfo: (Int, Double, Bool) -> Void = { _, _, _ in }   // (playing height, sharpen amount, isHDR)
     var onEnded: () -> Void = {}                                       // video finished (autoplay hook)
@@ -91,7 +92,7 @@ struct WebPlayer: NSViewRepresentable {
     private var flagsJS: String {
         var nativeSB = false
         if #available(macOS 15.4, *) { nativeSB = UBlockLoader.shared.contexts["SponsorBlock"] != nil }
-        return "window.__MT={adBlock:\(adBlock),sponsorBlock:\(sponsorBlock),maxResolution:\(maxResolution),enhance:'\(enhance)',playbackSpeed:\(playbackSpeed),nativeSB:\(nativeSB),gpuSaver:\(gpuSaver),debug:\(MTDebug.enabled)};"
+        return "window.__MT={adBlock:\(adBlock),sponsorBlock:\(sponsorBlock),maxResolution:\(maxResolution),enhance:'\(enhance)',playbackSpeed:\(playbackSpeed),autoFullscreen:\(autoFullscreen),nativeSB:\(nativeSB),gpuSaver:\(gpuSaver),debug:\(MTDebug.enabled)};"
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
@@ -176,15 +177,17 @@ struct WebPlayer: NSViewRepresentable {
         // settings change), so each navigation starts with the real values — no
         // post-load re-push needed, and no defaults flash before it lands.
 
-        /// Begin polling the player (host-driven) so a starting ad is cancelled within ~0.5s.
-        /// The tick itself re-checks window.__MT.adBlock, so toggling ad-block off stops the skip
-        /// live without tearing down the timer. Verified: one cancelPlayback ends the whole ad pod
-        /// and content resumes; forward seeking still works afterward (adSlots left intact).
+        /// Begin the host-driven player poll (~0.5s): cancel a starting ad AND auto-enter fullscreen.
+        /// Both ticks re-check their live __MT flag, so toggling either setting governs it without
+        /// tearing down the timer. Both must run from the host (evaluateJavaScript) — the identical
+        /// calls from an in-page timer are ignored (ad cancelPlayback and the Fullscreen API both
+        /// need host/user activation).
         func startAdSkip(_ webView: WKWebView) {
             adSkipWebView = webView
             adSkipTimer?.invalidate()
             adSkipTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak webView] _ in
                 webView?.evaluateJavaScript(WebPlayer.adSkipTick, completionHandler: nil)
+                webView?.evaluateJavaScript(WebPlayer.autoFullscreenTick, completionHandler: nil)
             }
         }
         func stopAdSkip() { adSkipTimer?.invalidate(); adSkipTimer = nil }
@@ -369,6 +372,37 @@ struct WebPlayer: NSViewRepresentable {
         try { mp.playVideo && mp.playVideo(); } catch(e){}
         var sk = document.querySelector('.ytp-ad-skip-button, .ytp-skip-ad-button, .ytp-ad-skip-button-modern, .ytp-ad-skip-button-container button');
         if(sk){ try { sk.click(); } catch(e){} }
+      } catch(e){}
+    })();
+    """
+
+    /// Host-driven auto-fullscreen tick. When __MT.autoFullscreen is on, enter YouTube's real
+    /// fullscreen ONCE per video as soon as content is genuinely playing (not an ad, not paused).
+    /// Clicking .ytp-fullscreen-button from a host evaluateJavaScript call satisfies the Fullscreen
+    /// API's user-activation requirement (verified) — an in-page timer's click would be ignored,
+    /// which is why this lives here. Tracked per videoId so exiting fullscreen isn't fought, and
+    /// a new video re-triggers ("when they start and are clicked on").
+    static let autoFullscreenTick = """
+    (function(){
+      try {
+        if(!(window.__MT && window.__MT.autoFullscreen)) return;
+        var mp = document.getElementById('movie_player'); var v = document.querySelector('video');
+        if(!mp || !v) return;
+        var id; try { id = new URLSearchParams(location.search).get('v'); } catch(e){ return; }
+        if(!id) return;
+        var st = window.__mtFs || (window.__mtFs = {});
+        if(st.vid !== id){ st.vid = id; st.done = false; st.tries = 0; }              // new video → re-arm
+        if(st.done) return;
+        // Entered fullscreen → mark done (so exiting it isn't fought; a new video re-arms).
+        if(document.fullscreenElement || document.webkitFullscreenElement){ st.done = true; return; }
+        if(mp.classList.contains('ad-showing')) return;                              // wait past ads
+        if(v.paused || (v.currentTime || 0) < 0.3) return;                           // wait until playing
+        if(st.tries >= 16){ st.done = true; return; }                               // give up after ~8s of tries
+        st.tries++;
+        // Retry the click each tick until it takes — right after an ad→content swap the button
+        // isn't immediately actionable, so a single click can no-op.
+        var b = document.querySelector('.ytp-fullscreen-button');
+        if(b){ try { b.click(); } catch(e){} }
       } catch(e){}
     })();
     """

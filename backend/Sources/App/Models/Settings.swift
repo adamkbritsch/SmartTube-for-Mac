@@ -18,6 +18,7 @@ struct Settings: Content, Sendable, Equatable {
     // settings.json (without these keys) decoding cleanly instead of resetting.
     var maxResolution: Bool = true  // force the highest available source resolution
     var enhance: String = "subtle"  // GPU detail-sharpen preset: "off" | "subtle" | "sharper"
+    var autoFullscreen: Bool = false // auto-enter fullscreen when a video starts playing
 
     static let `default` = Settings(
         adBlock: true,
@@ -27,7 +28,8 @@ struct Settings: Content, Sendable, Equatable {
         playbackSpeed: 1.0,
         theme: "dark",
         maxResolution: true,
-        enhance: "subtle"
+        enhance: "subtle",
+        autoFullscreen: false
     )
 }
 
@@ -45,6 +47,7 @@ struct SettingsPatch: Content, Sendable {
     var theme: String?
     var maxResolution: Bool?
     var enhance: String?
+    var autoFullscreen: Bool?
 
     func applied(to s: Settings) -> Settings {
         var out = s
@@ -56,6 +59,7 @@ struct SettingsPatch: Content, Sendable {
         if let v = theme, v == "dark" || v == "light" { out.theme = v }
         if let v = maxResolution { out.maxResolution = v }
         if let v = enhance, enhancePresets.contains(v) { out.enhance = v }
+        if let v = autoFullscreen { out.autoFullscreen = v }
         return out
     }
 }

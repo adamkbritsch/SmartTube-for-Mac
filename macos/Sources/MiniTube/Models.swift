@@ -11,11 +11,12 @@ struct Settings: Codable, Equatable {
     var theme: String
     var maxResolution: Bool = true          // force highest available source resolution
     var enhance: String = "subtle"          // GPU sharpen preset: "off" | "subtle" | "sharper"
+    var autoFullscreen: Bool = false        // auto-enter fullscreen when a video starts
 
     static let `default` = Settings(
         adBlock: true, sponsorBlock: true, deArrow: true,
         theaterMode: false, playbackSpeed: 1.0, theme: "dark",
-        maxResolution: true, enhance: "subtle"
+        maxResolution: true, enhance: "subtle", autoFullscreen: false
     )
 }
 

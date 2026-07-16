@@ -552,6 +552,11 @@ final class Store: ObservableObject {
         Task { await patchSettings("{\"playbackSpeed\":\(v)}") }
     }
 
+    func setAutoFullscreen(_ on: Bool) {
+        settings.autoFullscreen = on
+        Task { await patchSettings("{\"autoFullscreen\":\(on)}") }
+    }
+
     // MARK: - Account write actions (real subscribe / like)
 
     private struct ActionResult: Decodable { let ok: Bool }

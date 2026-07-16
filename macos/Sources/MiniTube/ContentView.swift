@@ -191,6 +191,7 @@ struct WatchPage: View {
         WebPlayer(videoId: videoId, adBlock: store.settings.adBlock, sponsorBlock: store.settings.sponsorBlock,
                   maxResolution: store.settings.maxResolution, enhance: store.settings.enhance,
                   gpuSaver: gpuSaver.active, playbackSpeed: store.settings.playbackSpeed,
+                  autoFullscreen: store.settings.autoFullscreen,
                   onEnhanceInfo: { h, a, hdr in Task { @MainActor in store.reportEnhance(height: h, amount: a, hdr: hdr) } },
                   onEnded: {
                       // Autoplay: the toggle in the up-next rail now actually does something.

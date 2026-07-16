@@ -38,6 +38,8 @@ struct SettingsSheet: View {
                         rowDivider
                         segRow("Enhance", "GPU detail-sharpen (off at 4K)", options: [("Off", "off"), ("Subtle", "subtle"), ("Sharper", "sharper")],
                                selected: store.settings.enhance) { store.setEnhance($0) }
+                        rowDivider
+                        toggleRow("Auto fullscreen", "Enter fullscreen when a video starts", store.settings.autoFullscreen) { store.setAutoFullscreen($0) }
                     }
 
                     section("Appearance") {
