@@ -32,27 +32,39 @@ enum FirefoxSession {
             let host = parts[0], name = parts[1], value = parts.dropFirst(2).joined(separator: "\t")
             if jar[name] == nil || host.contains("youtube") { jar[name] = value }
         }
-        guard let sapisid = jar["SAPISID"] ?? jar["__Secure-3PAPISID"] ?? jar["__Secure-1PAPISID"] else { return nil }
+        guard let sapisid = jar["SAPISID"] ?? jar["__Secure-3PAPISID"] ?? jar["__Secure-1PAPISID"] else {
+            print("[FirefoxSession] load: no SAPISID among \(jar.count) cookies → no session")
+            return nil
+        }
+        let sidFam = ["SID", "__Secure-1PSID", "__Secure-3PSID"].filter { jar[$0] != nil }
+        print("[FirefoxSession] load: \(jar.count) cookies, SID-family=\(sidFam.count), LOGIN_INFO=\(jar["LOGIN_INFO"] != nil)")
         let header = jar.map { "\($0.key)=\($0.value)" }.joined(separator: "; ")
         return Session(cookieHeader: header, sapisid: sapisid)
     }
 
-    /// The Firefox profile whose cookie store has a YouTube login (LOGIN_INFO).
+    /// The Firefox profile whose cookie store actually holds the YouTube/Google auth
+    /// cookies. Scored by how many of the auth cookies (SAPISID + SID family) it carries,
+    /// so an empty or stale sibling profile can never win. (Previously keyed on the
+    /// LOGIN_INFO cookie, but YouTube no longer reliably sets it — when it's absent the
+    /// old code silently fell back to the FIRST profile on disk, which may be an empty
+    /// stale one, producing a logged-OUT session and a non-personalized feed.)
     private static func locateDB() -> String? {
         let base = NSHomeDirectory() + "/Library/Application Support/Firefox/Profiles"
         guard let profiles = try? FileManager.default.contentsOfDirectory(atPath: base) else { return nil }
-        var fallback: String?
+        var best: (db: String, score: Int)?
         for profile in profiles {
             let db = base + "/" + profile + "/cookies.sqlite"
             guard FileManager.default.fileExists(atPath: db) else { continue }
             let tmp = NSTemporaryDirectory() + "mt_probe-\(UUID().uuidString).sqlite"
             guard copyWithSidecars(db, to: tmp) else { continue }
-            let n = runSqlite(db: tmp, sql: "SELECT COUNT(*) FROM moz_cookies WHERE name='LOGIN_INFO' AND host LIKE '%youtube.com';")
+            let n = runSqlite(db: tmp, sql: "SELECT COUNT(*) FROM moz_cookies WHERE name IN ('SAPISID','__Secure-1PSID','__Secure-3PSID','SID') AND (host LIKE '%youtube.com' OR host LIKE '%.google.com');")
             removeWithSidecars(tmp)
-            if (Int((n ?? "0").trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0) > 0 { return db }
-            if fallback == nil { fallback = db }
+            let score = Int((n ?? "").trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+            if score > (best?.score ?? 0) { best = (db, score) }
         }
-        return fallback
+        if let best { print("[FirefoxSession] selected profile (auth-cookie score \(best.score)): \(best.db)") }
+        else { print("[FirefoxSession] no Firefox profile has YouTube auth cookies") }
+        return best?.db
     }
 
     /// Copy the sqlite DB together with its -wal/-shm sidecars. Firefox rotates
