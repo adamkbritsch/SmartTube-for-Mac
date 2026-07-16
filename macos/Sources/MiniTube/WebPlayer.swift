@@ -1,5 +1,22 @@
 import SwiftUI
 import WebKit
+import AppKit
+
+/// A WKWebView that hands scroll-wheel events to the enclosing scroll view instead of
+/// eating them, so the page keeps scrolling while the pointer is over the player. The
+/// player page is cropped to just the video (overflow hidden, nothing to scroll), so
+/// forwarding every wheel event loses nothing. Fixes: hovering the video froze scrolling.
+final class ScrollThroughWebView: WKWebView {
+    override func scrollWheel(with event: NSEvent) {
+        // Nearest NSScrollView ancestor — SwiftUI's ScrollView is backed by one.
+        var v: NSView? = superview
+        while let cur = v {
+            if let sv = cur as? NSScrollView { sv.scrollWheel(with: event); return }
+            v = cur.superview
+        }
+        nextResponder?.scrollWheel(with: event)
+    }
+}
 
 extension WKWebsiteDataStore {
     /// In-memory, cookie-less store: the player runs real youtube.com LOGGED OUT
@@ -65,7 +82,7 @@ struct WebPlayer: NSViewRepresentable {
             }
         }
 
-        let webView = WKWebView(frame: .zero, configuration: config)
+        let webView = ScrollThroughWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = context.coordinator
         context.coordinator.latestFlags = flagsJS
         // Desktop-Chrome-on-macOS UA — the field-proven WebKit spoof: removes YouTube's

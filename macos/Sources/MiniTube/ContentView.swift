@@ -34,7 +34,9 @@ struct CardPress: ButtonStyle {
 // MARK: - Theme helpers
 
 func themeBackground(_ theme: String) -> Color {
-    theme == "dark" ? Color(red: 0.06, green: 0.06, blue: 0.06) : Color(red: 0.97, green: 0.97, blue: 0.97)
+    // OLED dark: pure #000 so black pixels are truly off on OLED panels. Elevated
+    // surfaces use Color.primary.opacity(...) which reads as subtle near-black on top.
+    theme == "dark" ? Color.black : Color(red: 0.97, green: 0.97, blue: 0.97)
 }
 func channelColor(_ name: String) -> Color {
     let palette: [Color] = [.red, .orange, .pink, .purple, .blue, .teal, .green, .indigo]
@@ -214,8 +216,12 @@ struct WatchPage: View {
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 24) {
-            ScrollView {
+        // ONE scroll view over BOTH columns so the up-next rail scrolls together with the
+        // player/description/comments (was two independent ScrollViews). A vertical ScrollView
+        // fixes the cross-axis width, so the main column takes the remaining space and the rail
+        // stays a fixed 402pt beside it.
+        ScrollView {
+            HStack(alignment: .top, spacing: 24) {
                 VStack(alignment: .leading, spacing: 12) {
                     playerSlot
                     playerBar
@@ -229,36 +235,34 @@ struct WatchPage: View {
                 }
                 .padding(20)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            }
 
-            if !store.settings.theaterMode {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack {
-                        Text("Up next").font(.headline)
-                        Spacer()
-                        Text("Autoplay").font(.caption).foregroundStyle(.secondary)
-                        Toggle("", isOn: $autoplay).labelsHidden().toggleStyle(.switch).controlSize(.mini).clickable()
-                    }
-                    // Only show the All / From-channel filter when it would actually change the
-                    // list — i.e. the recs are a mix of this channel and others. If every rec is
-                    // from the uploader (or none are), the filter is a no-op, so hide it.
-                    if channelFilterUseful, let ch = info?.channel {
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 8) {
-                                recChip("All")
-                                recChip("From \(ch)")
+                if !store.settings.theaterMode {
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Text("Up next").font(.headline)
+                            Spacer()
+                            Text("Autoplay").font(.caption).foregroundStyle(.secondary)
+                            Toggle("", isOn: $autoplay).labelsHidden().toggleStyle(.switch).controlSize(.mini).clickable()
+                        }
+                        // Only show the All / From-channel filter when it would actually change the
+                        // list — i.e. the recs are a mix of this channel and others. If every rec is
+                        // from the uploader (or none are), the filter is a no-op, so hide it.
+                        if channelFilterUseful, let ch = info?.channel {
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 8) {
+                                    recChip("All")
+                                    recChip("From \(ch)")
+                                }
                             }
                         }
+                        ForEach(filteredRecs) { rec in
+                            Button { store.openWatch(rec.id) } label: { RecRow(video: rec) }
+                                .buttonStyle(CardPress()).clickable()
+                        }
                     }
-                    ForEach(filteredRecs) { rec in
-                        Button { store.openWatch(rec.id) } label: { RecRow(video: rec) }
-                            .buttonStyle(CardPress()).clickable()
-                    }
+                    .padding(.vertical, 20).padding(.trailing, 20).padding(.leading, 4)
+                    .frame(width: 402)
                 }
-                .padding(.vertical, 20).padding(.trailing, 20).padding(.leading, 4)
-            }
-            .frame(width: 402)
             }
         }
         .animation(.easeInOut(duration: 0.2), value: store.settings.theaterMode)
