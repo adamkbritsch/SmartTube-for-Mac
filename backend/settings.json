@@ -1,7 +1,8 @@
 {
   "adBlock" : true,
+  "autoFullscreen" : true,
   "deArrow" : true,
-  "enhance" : "sharper",
+  "enhance" : "subtle",
   "maxResolution" : true,
   "playbackSpeed" : 1,
   "sponsorBlock" : true,

@@ -586,6 +586,7 @@ private struct HeaderBar: View {
     @Binding var showExtSettings: Bool
     @Binding var showSettings: Bool
     @State private var showNotifications = false
+    @State private var showAccountMenu = false
     @FocusState private var searchFocused: Bool
 
     var body: some View {
@@ -636,17 +637,35 @@ private struct HeaderBar: View {
 
     @ViewBuilder private var accountView: some View {
         if store.account.signedIn, let p = store.account.profile {
-            Menu {
-                Text(p.name)
-                Text(p.email)
-                Divider()
-                Button("Sign out") { store.signOut() }
-            } label: {
+            // A Button + popover, NOT a Menu: macOS renders Menu labels through AppKit menu
+            // chrome, which mangles a resizable/async Image into a broken-image glyph. Plain
+            // Buttons render the avatar correctly (same as the sidebar avatars).
+            Button { showAccountMenu.toggle() } label: {
                 avatarImage(p.picture)
             }
-            .menuIndicator(.hidden)
-            .frame(width: 32, height: 32)
-            .help(p.name)
+            .buttonStyle(.plain).clickable().help(p.name)
+            .popover(isPresented: $showAccountMenu, arrowEdge: .bottom) {
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack(spacing: 10) {
+                        avatarImage(p.picture)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(p.name).font(.system(size: 14, weight: .semibold))
+                            if !p.email.isEmpty { Text(p.email).font(.system(size: 12)).foregroundStyle(.secondary) }
+                        }
+                    }
+                    .padding(.horizontal, 14).padding(.top, 12).padding(.bottom, 10)
+                    Divider()
+                    Button { showAccountMenu = false; store.signOut() } label: {
+                        Label("Sign out", systemImage: "rectangle.portrait.and.arrow.right")
+                            .font(.system(size: 13))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 14).padding(.vertical, 10)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain).clickable()
+                }
+                .frame(width: 250)
+            }
         } else {
             Button { store.signIn() } label: {
                 HStack(spacing: 6) {
