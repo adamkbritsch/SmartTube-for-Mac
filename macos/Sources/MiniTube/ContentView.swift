@@ -327,7 +327,12 @@ struct WatchPage: View {
     }
 
     @ViewBuilder private var commentsSection: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        // LazyVStack (NOT VStack): comments materialize as they scroll into view. A plain VStack
+        // laid out EVERY comment immediately, so the last row's `.onAppear` fired at once →
+        // loadMoreComments → append → new last row's `.onAppear` fires immediately → … a runaway
+        // pagination + full-list re-layout loop that pinned the main thread at ~100% (profiled).
+        // Lazily, `.onAppear` fires only when a row actually scrolls in, so pagination is correct.
+        LazyVStack(alignment: .leading, spacing: 16) {
             Text((info?.commentCount).flatMap { $0.isEmpty ? nil : $0 } ?? "Comments")
                 .font(.headline).padding(.top, 4)
             ForEach(store.comments) { c in

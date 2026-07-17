@@ -765,12 +765,9 @@ struct WebPlayer: NSViewRepresentable {
       // didn't: (1) it re-pins when the top level RISES — on WebKit a video's 4K/HDR-AV1
       // rendition can populate AFTER the lower ones, so committing once on the first list
       // latched a sub-max level forever; (2) "Max Quality" is the user's EXPLICIT demand for
-      // the best rendition, so it targets the ABSOLUTE max even while the GPU saver is active.
-      // AV1 4K/HDR decode runs on the hardware media engine, not the Metal cores Visionary
-      // needs, so it barely competes; the saver still sheds the per-frame Enhance convolution
-      // (the app's real GPU cost) in applyEnhance. Re-pinning is rate-limited so a normal ABR
-      // ramp doesn't thrash YouTube's buffer controller (→ 4K stutter); once the request is
-      // accepted, it stops.
+      // the best rendition, so it targets the ABSOLUTE max (resolution is NOT the Visionary
+      // bottleneck — native players do 4K HDR fine alongside Topaz). Re-pinning is rate-limited
+      // so a normal ABR ramp doesn't thrash YouTube's buffer controller; once accepted, it stops.
       var __mtQ = { vid:null, target:null, reached:false, lastAt:0, tries:0 };
       function forceMaxQuality(){
         if(!window.__MT.maxResolution) return;
