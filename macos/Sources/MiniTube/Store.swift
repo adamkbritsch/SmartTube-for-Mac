@@ -129,24 +129,55 @@ final class Store: ObservableObject {
         catch { logDecodeFailure(endpoint, error); return nil }
     }
 
-    /// Sign in by reading the existing YouTube login from Firefox (no setup, no code).
-    func signIn() {
-        device = DeviceInfo(userCode: "", verificationURL: "", status: "connecting")
-        guard let url = URL(string: "\(base)/auth/connect") else { device = nil; return }
+    /// Sign in via the real Google login hosted in the app's own session store (SignInWebView).
+    func signIn() { device = DeviceInfo("webLogin") }
+
+    /// SignInWebView reached youtube.com → the login completed on our store. Push the jar, validate,
+    /// and pull the account. connect failing here means the cookies still don't authenticate.
+    func signInSucceeded() {
+        device = DeviceInfo("connecting")
         Task {
-            var req = URLRequest(url: url); req.httpMethod = "POST"; req.timeoutInterval = 30
-            if let (data, _) = try? await URLSession.shared.data(for: req),
-               let res = try? JSONDecoder().decode(ConnectResult.self, from: data) {
-                if res.signedIn {
-                    await fetchAccount()
-                    device = nil
-                } else {
-                    device = DeviceInfo(userCode: "", verificationURL: "", status: res.error ?? "error")
-                }
+            await PlayerSession.shared.pushToBackend()
+            if await connectAndFetch() {
+                device = DeviceInfo("success")
+                try? await Task.sleep(nanoseconds: 1_400_000_000)
+                if device?.status == "success" { device = nil }
             } else {
-                device = DeviceInfo(userCode: "", verificationURL: "", status: "error")
+                device = DeviceInfo("error")
             }
         }
+    }
+
+    /// Google refused the embedded login → offer the one-time Firefox fallback.
+    func signInBlocked() { device = DeviceInfo("webBlocked") }
+
+    /// Fallback: seed the app's store from Firefox once, then attach.
+    func signInViaFirefox() {
+        device = DeviceInfo("connecting")
+        Task {
+            await PlayerSession.shared.seedFromFirefox()
+            await PlayerSession.shared.pushToBackend()
+            if await connectAndFetch() {
+                device = DeviceInfo("success")
+                try? await Task.sleep(nanoseconds: 1_400_000_000)
+                if device?.status == "success" { device = nil }
+            } else {
+                device = DeviceInfo("no_session")
+            }
+        }
+    }
+
+    /// POST /auth/connect (validates the pushed jar + pulls profile/subs). True if signed in.
+    @discardableResult
+    func connectAndFetch() async -> Bool {
+        connected = false                                   // allow autoConnect to re-run if needed
+        guard let url = URL(string: "\(base)/auth/connect") else { return false }
+        var req = URLRequest(url: url); req.httpMethod = "POST"; req.timeoutInterval = 30
+        guard let (data, _) = try? await URLSession.shared.data(for: req),
+              let res = try? JSONDecoder().decode(ConnectResult.self, from: data), res.signedIn else { return false }
+        connected = true
+        await fetchAccount()
+        return true
     }
 
     func cancelSignIn() { device = nil }
@@ -380,6 +411,8 @@ final class Store: ObservableObject {
         Task {
             var req = URLRequest(url: url); req.httpMethod = "POST"
             _ = try? await URLSession.shared.data(for: req)
+            await PlayerSession.shared.reset()   // wipe the app's persistent session profile
+            connected = false
             await fetchAccount()
         }
     }

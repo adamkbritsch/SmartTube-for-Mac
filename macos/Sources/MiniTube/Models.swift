@@ -233,11 +233,20 @@ struct Account: Codable, Equatable {
 }
 
 /// Sign-in sheet state. status: connecting | no_session | error
+/// Sign-in sheet state. status: webLogin (in-app Google login) | webBlocked (Google refused the
+/// embedded login → offer Firefox fallback) | connecting | success | no_session | error.
+/// The `userCode`/`verificationURL` fields are retained (unused) so the SmartTube-TV OAuth device
+/// flow can be added later without a model change. `id` is CONSTANT so status changes update the
+/// sheet content in place instead of dismissing + recreating the hosted WebView.
 struct DeviceInfo: Codable, Equatable, Identifiable {
-    let userCode: String
-    let verificationURL: String
+    var userCode: String = ""
+    var verificationURL: String = ""
     let status: String
-    var id: String { userCode.isEmpty ? status : userCode }
+    var id: String { "signin" }
+    init(_ status: String) { self.status = status }
+    init(userCode: String, verificationURL: String, status: String) {
+        self.userCode = userCode; self.verificationURL = verificationURL; self.status = status
+    }
 }
 
 struct ConnectResult: Codable {

@@ -158,7 +158,7 @@ struct SettingsSheet: View {
             .padding(.horizontal, 12).padding(.vertical, 10)
         } else {
             HStack {
-                label("Not signed in", "Uses the YouTube login in your Firefox profile")
+                label("Not signed in", "Sign in with your Google account")
                 Spacer(minLength: 10)
                 Button { store.signIn() } label: {
                     Text("Sign in").font(.system(size: 13, weight: .semibold))

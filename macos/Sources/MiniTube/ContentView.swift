@@ -521,34 +521,54 @@ struct DeviceSignInSheet: View {
     private var status: String { store.device?.status ?? info.status }
 
     var body: some View {
-        VStack(spacing: 18) {
+        VStack(spacing: 16) {
             HStack(spacing: 8) { LogoMark(); Text("Sign in to YouTube").font(.title3.bold()) }
 
             switch status {
+            case "webLogin":
+                // The real Google login, hosted in the app's own session store.
+                SignInWebView(onSuccess: { store.signInSucceeded() },
+                              onBlocked: { store.signInBlocked() })
+                    .frame(width: 460, height: 560)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                Button("Use my Firefox login instead") { store.signInViaFirefox() }
+                    .buttonStyle(.plain).font(.caption).foregroundStyle(.secondary)
+            case "webBlocked":
+                message("lock.trianglebadge.exclamationmark",
+                        "Google blocked the in-app login",
+                        "Google sometimes refuses sign-in inside an embedded browser. You can attach using your existing YouTube login in Firefox instead.")
+                HStack(spacing: 10) {
+                    Button("Try again") { store.signIn() }
+                    Button("Use my Firefox login") { store.signInViaFirefox() }.buttonStyle(.borderedProminent)
+                }
             case "connecting":
                 VStack(spacing: 12) {
                     ProgressView().controlSize(.large)
-                    Text("Connecting to your YouTube session in Firefox…")
-                        .foregroundStyle(.secondary).multilineTextAlignment(.center)
+                    Text("Finishing sign-in…").foregroundStyle(.secondary)
                 }
+            case "success":
+                message("checkmark.circle.fill", "Signed in", "")
             case "no_session":
                 message("person.crop.circle.badge.exclamationmark",
-                        "Not signed into YouTube in Firefox",
-                        "Open YouTube in Firefox and sign in, then try again. This app uses that existing login — no code or setup needed.")
+                        "No YouTube login found",
+                        "Sign in with Google above, or make sure you're logged into youtube.com in Firefox and try again.")
                 HStack(spacing: 10) {
-                    Button("Open YouTube") { store.openURL("https://www.youtube.com") }
-                    Button("Try again") { store.signIn() }.buttonStyle(.borderedProminent)
+                    Button("Sign in with Google") { store.signIn() }
+                    Button("Try Firefox again") { store.signInViaFirefox() }.buttonStyle(.borderedProminent)
                 }
             default: // error
-                message("xmark.circle.fill", "Couldn't connect",
-                        "Something went wrong reading your Firefox YouTube session. Make sure you're logged in at youtube.com in Firefox, then try again.")
-                Button("Try again") { store.signIn() }.buttonStyle(.borderedProminent)
+                message("xmark.circle.fill", "Couldn't complete sign-in",
+                        "The login didn't establish a working YouTube session. Try again, or use your Firefox login.")
+                HStack(spacing: 10) {
+                    Button("Try again") { store.signIn() }
+                    Button("Use Firefox login") { store.signInViaFirefox() }.buttonStyle(.borderedProminent)
+                }
             }
 
             Button("Cancel") { store.cancelSignIn() }.buttonStyle(.plain).foregroundStyle(.secondary)
         }
-        .padding(32)
-        .frame(width: 430)
+        .padding(status == "webLogin" ? 16 : 32)
+        .frame(width: status == "webLogin" ? 500 : 430)
     }
 
     private func message(_ symbol: String, _ title: String, _ body: String) -> some View {
