@@ -46,9 +46,10 @@ func routes(_ app: Application) throws {
     api.get("account", use: AuthController.account)
     api.get("health") { _ async in "ok" }
 
-    // ── Auth (Firefox YouTube session) ───────────────────────────────────
+    // ── Auth (app-owned self-rotating session) ───────────────────────────
     let auth = app.grouped("auth")
-    auth.post("connect", use: AuthController.connect)   // primary: use Firefox YouTube session
+    auth.post("cookies", use: AuthController.pushCookies)   // the app pushes its own cookie jar
+    auth.post("connect", use: AuthController.connect)       // validate + pull profile/subs
     auth.get("logout", use: AuthController.logout)
     auth.post("logout", use: AuthController.logout)
 }

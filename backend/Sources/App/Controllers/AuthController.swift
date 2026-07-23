@@ -3,6 +3,7 @@ import Vapor
 struct AccountResponse: Content {
     let configured: Bool
     let signedIn: Bool
+    let authSuspect: Bool     // session decayed (feeds empty) — client should re-push / re-auth
     let profile: GoogleOAuth.Profile?
     let subscriptions: [GoogleOAuth.Subscription]
 }
@@ -11,6 +12,12 @@ struct ConnectResult: Content {
     let signedIn: Bool
     let error: String?
     let subscriptionCount: Int
+}
+
+struct PushResult: Content {
+    let ok: Bool
+    let cookieCount: Int
+    let hasAuth: Bool
 }
 
 enum AuthController {
@@ -32,9 +39,23 @@ enum AuthController {
         await req.auth.setProfile(profile ?? .init(name: "My YouTube", email: "", picture: ""))
         await req.auth.setSubscriptions(subs)
         await req.auth.setConnected(true)
+        await req.auth.clearSuspect()
         await req.state.clearFeedCache()
-        req.logger.info("connected via Firefox session (\(subs.count) subscriptions)")
+        req.logger.info("connected (\(subs.count) subscriptions)")
         return ConnectResult(signedIn: true, error: nil, subscriptionCount: subs.count)
+    }
+
+    /// The macOS app pushes its own persistent-store cookie jar here (loopback only). This
+    /// jar — not Firefox — is the session; it self-rotates in the app's WKWebView and is
+    /// re-pushed on launch, after each watch, and on a keepalive timer.
+    static func pushCookies(_ req: Request) async throws -> PushResult {
+        let cookies = try req.content.decode([PushedCookie].self)
+        if ProcessInfo.processInfo.environment["MT_SIGNED_OUT"] == "1" {
+            return PushResult(ok: false, cookieCount: cookies.count, hasAuth: false)
+        }
+        let hasAuth = SessionJar.session(from: cookies) != nil
+        await req.auth.setJar(cookies)
+        return PushResult(ok: true, cookieCount: cookies.count, hasAuth: hasAuth)
     }
 
     static func logout(_ req: Request) async throws -> Response {
@@ -46,11 +67,11 @@ enum AuthController {
     // MARK: State for the clients
 
     static func account(_ req: Request) async throws -> AccountResponse {
-        // Firefox-session path: no configuration required.
         let signedIn = await req.auth.connected
         return AccountResponse(
             configured: true,
             signedIn: signedIn,
+            authSuspect: signedIn ? await req.auth.authSuspect : false,
             profile: signedIn ? await req.auth.profile : nil,
             subscriptions: signedIn ? await req.auth.subscriptions : []
         )

@@ -99,6 +99,9 @@ enum VideosController {
             await InnerTube.homeFeed(session: session, client: client)
         }
         guard !page.videos.isEmpty else {
+            // Signed in but the personalized home came back empty → the session may have decayed.
+            // Probe it (rate-limited) so /api/account can report authSuspect and the client re-pushes.
+            Task { await req.auth.suspectCheck(client: client) }
             return FeedPageResponse(videos: try await list(req), continuation: nil)
         }
         return FeedPageResponse(videos: page.videos.map(listItem(from:)), continuation: page.continuation)

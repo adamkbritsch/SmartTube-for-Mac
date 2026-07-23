@@ -38,8 +38,8 @@ public func configure(_ app: Application) async throws {
     let adRulesPath = app.directory.workingDirectory + "adrules.json"
     app.state = AppState(seed: CatalogSeed.videos, settingsPath: settingsPath, adRulesPath: adRulesPath)
 
-    // Firefox-session auth state (cookie sign-in; no OAuth client needed).
-    app.auth = AuthState(threadPool: app.threadPool)
+    // Auth state — the app's pushed cookie jar (persisted to App Support, survives restart).
+    app.auth = AuthState(threadPool: app.threadPool, sessionPath: SessionJar.defaultPath)
 
     try routes(app)
 

@@ -49,6 +49,9 @@ enum FirefoxSession {
     /// old code silently fell back to the FIRST profile on disk, which may be an empty
     /// stale one, producing a logged-OUT session and a non-personalized feed.)
     private static func locateDB() -> String? {
+        // MT_NO_FIREFOX=1 → pretend Firefox has no profile (test hook: prove the app stays signed
+        // in from its own pushed jar with Firefox out of the loop).
+        if ProcessInfo.processInfo.environment["MT_NO_FIREFOX"] == "1" { return nil }
         let base = NSHomeDirectory() + "/Library/Application Support/Firefox/Profiles"
         guard let profiles = try? FileManager.default.contentsOfDirectory(atPath: base) else { return nil }
         var best: (db: String, score: Int)?
