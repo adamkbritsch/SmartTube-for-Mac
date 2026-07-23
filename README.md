@@ -8,7 +8,8 @@ A native macOS YouTube front end. It plays the **real** `youtube.com` watch page
 cropped WebView (so playback, HDR, DRM, and captions are exactly YouTube's own), while every
 other surface — recommendations, subscriptions, search, channels, Shorts, playlists, watch
 history — is rendered as a native SwiftUI app personalized to **your** account. There is no
-Google Cloud project and no OAuth: it reuses the YouTube login you already have in Firefox.
+Google Cloud project needed — you sign in with Google in the app, and it keeps its own
+persistent, self-rotating session (with a one-time Firefox seed as fallback).
 
 <p align="center">
   <img src="assets/screenshot-home.png" alt="SmartTube for Mac — native macOS YouTube front end" width="900">
@@ -24,7 +25,7 @@ Open the `.dmg`, drag **SmartTube** onto **Applications**, then launch it.
 
 > **First launch only:** the app isn't notarized (that needs a paid Apple Developer account), so macOS Gatekeeper blocks it the first time. **Right-click SmartTube and choose Open**, then click **Open** in the dialog — you only need to do this once, and it's trusted from then on. (Equivalent: `xattr -dr com.apple.quarantine /Applications/SmartTube.app`.)
 
-Needs an **Apple Silicon M3 or newer** Mac and **Firefox** signed into YouTube — see [Requirements](#requirements). Prefer to build from source? Jump to [Build & run](#build--run).
+Needs an **Apple Silicon M3 or newer** Mac; sign in with Google in-app — see [Requirements](#requirements). Prefer to build from source? Jump to [Build & run](#build--run).
 
 ## Features
 
@@ -67,7 +68,8 @@ Needs an **Apple Silicon M3 or newer** Mac and **Firefox** signed into YouTube �
 - **macOS 14+** to launch. (macOS 15.4+ is needed only for the experimental in-player
   `WKWebExtension` mode, `MT_PLAYER_EXT=1` — off by default because it hangs the watch page on
   macOS 26; ad-blocking/SponsorBlock use uBO's rules + the community API directly instead.)
-- **Firefox**, logged into YouTube (that's where the session comes from).
+- A **Google/YouTube account** — sign in with Google in the app. (Optional: **Firefox** logged
+  into YouTube, used only as a one-time sign-in fallback if Google blocks the in-app login.)
 
 That's it to *run* the [downloadable app](#download). Building from source additionally needs a recent **Swift toolchain** (5.9+ — the Command Line Tools are enough, full Xcode is not required).
 
@@ -95,13 +97,23 @@ swift run --package-path macos
 
 ## Sign in
 
-Click **Sign in** — that's it. SmartTube for Mac reads the YouTube login already in your Firefox profile
-(the same idea as `yt-dlp --cookies-from-browser`): the backend reads Firefox's local
-`cookies.sqlite`, builds a `SAPISIDHASH` auth header from your session, and calls InnerTube as
-you. Cookies are read-only and never stored or sent anywhere except authenticated calls to
-`youtube.com`. Sign-in state is in memory, so click **Sign in** again after a backend restart.
+Click **Sign in** and log into Google in the window that appears. SmartTube for Mac keeps its own
+**persistent, self-rotating session** — a private WebKit browser profile that logs in once, then
+renews its own cookies (`__Secure-*PSIDTS` rotate every ~10 minutes) on normal page loads and
+persists them across launches, like a real browser. The backend reads that session (never a
+static cookie snapshot), so the attachment stays alive for as long as you keep using the app,
+instead of expiring in days. A lightweight keepalive refreshes it while the app is idle.
 
-Only Firefox is wired up; be logged into YouTube there first.
+**Firefox is now just a fallback.** If Google refuses the in-app login (it sometimes blocks
+embedded browsers), the sheet offers **Use my Firefox login** — a one-time seed from your Firefox
+YouTube session into the app's own profile, after which Firefox is never read again. Existing
+installs migrate automatically on first launch.
+
+Nothing leaves the machine except authenticated calls to `youtube.com`. Sign out from
+**Settings → Account** (wipes the app's session profile).
+
+> Horizon: once Google enforces Device Bound Session Credentials (DBSC) on macOS, copied cookies
+> can't rotate; the durable successor is the SmartTube-TV OAuth device flow (not yet implemented).
 
 ## Also in this repo
 
@@ -112,7 +124,7 @@ extension (`extension/`) that toggles shared settings — both secondary to the 
 
 ```
 macos/       SwiftUI app (SwiftPM executable; AppKit bootstrap + WebKit player)
-backend/     Vapor package — InnerTube client, Firefox-session auth, feed/search/watch APIs
+backend/     Vapor package — InnerTube client, app-pushed session jar auth, feed/search/watch APIs
 extension/   Companion Firefox WebExtension (optional)
 patches/     SmartTube for Mac's patch to uBlock Origin (mt-shim.js)
 package.sh   Build + assemble SmartTube.app + install
@@ -130,7 +142,7 @@ macOS will quarantine it — right-click and choose **Open**, or run
 SmartTube for Mac is a personal, educational project. It is **not affiliated with, authorized by, or
 endorsed by YouTube or Google.**
 
-- It uses YouTube's private InnerTube API and your local Firefox cookies to act as you.
+- It uses YouTube's private InnerTube API and your own YouTube session cookies to act as you.
   Nothing leaves your machine except the calls YouTube would make for you anyway.
 - It blocks ads (uBlock Origin's filter rules) and skips sponsor segments (SponsorBlock). This may
   conflict with YouTube's Terms of Service. **Use at your own risk.**
