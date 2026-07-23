@@ -200,19 +200,21 @@ struct SponsorSegment: Codable, Hashable {
 struct Account: Codable, Equatable {
     let configured: Bool
     let signedIn: Bool
+    let authSuspect: Bool     // backend flagged the session as decayed (feeds empty)
     let profile: Profile?
     let subscriptions: [Subscription]
 
-    init(configured: Bool, signedIn: Bool, profile: Profile?, subscriptions: [Subscription]) {
-        self.configured = configured; self.signedIn = signedIn
+    init(configured: Bool, signedIn: Bool, authSuspect: Bool = false, profile: Profile?, subscriptions: [Subscription]) {
+        self.configured = configured; self.signedIn = signedIn; self.authSuspect = authSuspect
         self.profile = profile; self.subscriptions = subscriptions
     }
 
-    // Decode-tolerant: a missing subscriptions array must not fail sign-in state.
+    // Decode-tolerant: missing keys must not fail sign-in state.
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         configured = (try? c.decode(Bool.self, forKey: .configured)) ?? true
         signedIn = try c.decode(Bool.self, forKey: .signedIn)
+        authSuspect = (try? c.decode(Bool.self, forKey: .authSuspect)) ?? false
         profile = try? c.decode(Profile.self, forKey: .profile)
         subscriptions = (try? c.decode([Subscription].self, forKey: .subscriptions)) ?? []
     }
@@ -229,7 +231,7 @@ struct Account: Codable, Equatable {
         var id: String { channelId.isEmpty ? title : channelId }
     }
 
-    static let empty = Account(configured: false, signedIn: false, profile: nil, subscriptions: [])
+    static let empty = Account(configured: false, signedIn: false, authSuspect: false, profile: nil, subscriptions: [])
 }
 
 /// Sign-in sheet state. status: connecting | no_session | error

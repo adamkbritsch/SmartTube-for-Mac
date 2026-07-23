@@ -101,6 +101,8 @@ final class Store: ObservableObject {
         if homeLoading { await loadVideos() }
     }
 
+    private var repushAttempted = false
+
     func fetchAccount() async {
         guard let url = URL(string: "\(base)/api/account") else { return }
         do {
@@ -108,8 +110,23 @@ final class Store: ObservableObject {
             let a = try JSONDecoder().decode(Account.self, from: data)
             let wasSignedIn = account.signedIn
             if a != account { account = a }
-            if a.signedIn && device != nil { device = nil }        // sign-in completed
-            if a.signedIn != wasSignedIn { await loadVideos() }     // swap home feed ↔ catalog
+            if a.signedIn && !a.authSuspect && device != nil { device = nil }   // sign-in truly good
+            if a.signedIn != wasSignedIn { await loadVideos() }                 // swap home feed ↔ catalog
+
+            // Self-heal a decayed session. Signed in but the backend saw empty feeds → try ONE
+            // silent re-export + re-validate (cookies may have just rotated mid-flight). If that
+            // doesn't clear it, un-latch so the signed-out UI / auto-connect can take over.
+            if a.signedIn && a.authSuspect {
+                if !repushAttempted {
+                    repushAttempted = true
+                    await PlayerSession.shared.pushToBackend()
+                    _ = await connectAndFetch()
+                } else {
+                    connected = false
+                }
+            } else {
+                repushAttempted = false
+            }
         } catch { logDecodeFailure("account", error) }
     }
 
