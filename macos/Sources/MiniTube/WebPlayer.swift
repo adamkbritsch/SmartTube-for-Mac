@@ -104,8 +104,12 @@ struct WebPlayer: NSViewRepresentable {
             config.websiteDataStore = UBlockLoader.shared.dataStore ?? .player
             config.webExtensionController = controller
         } else {
-            config.websiteDataStore = .player
+            // The app's OWN persistent, self-rotating session profile (see PlayerSession). Playback
+            // applies YouTube's Set-Cookie rotations to it and persists them across launches — no
+            // Firefox re-read, no decaying static snapshot.
+            config.websiteDataStore = PlayerSession.shared.store
         }
+        PlayerSession.shared.watchOpen = true
         config.userContentController.add(context.coordinator, name: "minitube")
         // flags FIRST at documentStart: the engine/enhance loops read window.__MT the
         // instant they start, so a user's disabled features are never transiently on.
@@ -134,24 +138,11 @@ struct WebPlayer: NSViewRepresentable {
         // Host-driven ad skip: dismiss adSlots video ads via the player's cancelPlayback() (the
         // only reliable path since stripping adSlots from the response would freeze forward seeks).
         context.coordinator.startAdSkip(webView)
-        // Sign the WebView into YouTube with the user's Firefox cookies BEFORE the first load, so
-        // playback is attested and far-forward seeks work (signed-out YouTube is SABR-throttled and
-        // can't jump to a distant position — verified). Read off-main; the initial load is gated on
-        // completion. No Firefox login → empty set → normal signed-out playback.
-        let coordinator = context.coordinator
-        let store = config.websiteDataStore
-        DispatchQueue.global(qos: .userInitiated).async {
-            let cookies = FirefoxCookies.load()
-            DispatchQueue.main.async {
-                guard !cookies.isEmpty else { coordinator.signInDidComplete(); return }
-                let group = DispatchGroup()
-                for c in cookies { group.enter(); store.httpCookieStore.setCookie(c) { group.leave() } }
-                group.notify(queue: .main) {
-                    Coordinator.debugLog("player signed in — \(cookies.count) YouTube/Google cookies installed")
-                    coordinator.signInDidComplete()
-                }
-            }
-        }
+        // The persistent store already holds the (self-rotating) session cookies from prior runs and
+        // the one-time seed — no Firefox re-read. Release the gated first load immediately; playback
+        // attests + rotates the session from here. (The gate stays so video CHANGES within a session
+        // still route through load(); signInReady is just satisfied up front now.)
+        context.coordinator.signInDidComplete()
         return PlayerContainer(webView: webView)
     }
 
@@ -215,6 +206,9 @@ struct WebPlayer: NSViewRepresentable {
         coordinator.stopAdSkip()
         container.webView.pauseAllMediaPlayback(completionHandler: nil)
         container.webView.loadHTMLString("", baseURL: nil)
+        // Playback just rotated the session cookies — capture them for the backend.
+        PlayerSession.shared.watchOpen = false
+        Task { @MainActor in await PlayerSession.shared.pushToBackend() }
     }
 
     func makeCoordinator() -> Coordinator { Coordinator(onFullscreen: onFullscreen, onEnhanceInfo: onEnhanceInfo, onEnded: onEnded, onTheater: onTheater, onMarkWatched: onMarkWatched, adBlock: adBlock, sponsorBlock: sponsorBlock) }

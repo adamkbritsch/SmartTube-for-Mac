@@ -34,6 +34,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         backend.startIfNeeded()   // spawn the Vapor server if it isn't already up
+        // Attach the app's own self-rotating session: migrate an existing Firefox login into the
+        // persistent store once, push the jar to the backend, start the keepalive.
+        Task { @MainActor in await PlayerSession.shared.bootstrap() }
         // The in-player WKWebExtension mode is OFF by default (it hangs navigation on macOS 26);
         // only stage/load the extensions when opted back in for a retest (MT_PLAYER_EXT=1).
         if #available(macOS 15.4, *), WebPlayer.playerUsesExtension { Task { await UBlockLoader.shared.preload() } }
