@@ -24,7 +24,6 @@ final class PlayerSession {
     var watchOpen = false
     private var lastRotateAt = Date.distantPast
     private var keepaliveTimer: Timer?
-    private var keepaliveWebView: WKWebView?
 
     /// The persistent, self-rotating store. Stable identifier so it survives relaunch.
     /// MT_SIGNED_OUT=1 → a throwaway non-persistent store (clean signed-out screenshots).
@@ -75,18 +74,26 @@ final class PlayerSession {
     @discardableResult
     func pushToBackend() async -> Bool {
         let jar = await exportCookies()
-        guard let url = URL(string: "\(base)/auth/cookies"),
-              let body = try? JSONSerialization.data(withJSONObject: jar) else { return false }
+        guard let url = URL(string: "\(base)/auth/cookies") else { return false }
+        guard let body = try? JSONSerialization.data(withJSONObject: jar) else {
+            print("[PlayerSession] push: JSON serialize FAILED (jar=\(jar.count))"); return false
+        }
         var req = URLRequest(url: url); req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = body
-        guard let (data, resp) = try? await URLSession.shared.data(for: req),
-              let http = resp as? HTTPURLResponse, http.statusCode == 200 else { return false }
-        lastRotateAt = Date()
-        if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            return (obj["ok"] as? Bool) ?? true
+        do {
+            let (data, resp) = try await URLSession.shared.data(for: req)
+            let code = (resp as? HTTPURLResponse)?.statusCode ?? -1
+            if code != 200 { print("[PlayerSession] push: HTTP \(code) (jar=\(jar.count))"); return false }
+            if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                return (obj["ok"] as? Bool) ?? true
+            }
+            return true
+        } catch {
+            // -1004 = backend not up yet during the launch retry; expected, don't log.
+            if (error as NSError).code != -1004 { print("[PlayerSession] push: \(error)") }
+            return false
         }
-        return true
     }
 
     /// True if the store already holds the auth cookies needed for a signed-in session.
@@ -115,6 +122,14 @@ final class PlayerSession {
     /// if the store has no session yet), pushes the jar, and starts the keepalive.
     private var warmupWebView: WKWebView?
 
+    /// Reliable async delay. Task.sleep on a main-actor task doesn't resume dependably in this
+    /// plain-SwiftPM AppKit executable; DispatchQueue integrates with the run loop and does.
+    private func delay(_ seconds: Double) async {
+        await withCheckedContinuation { cont in
+            DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { cont.resume() }
+        }
+    }
+
     func bootstrap() async {
         _ = store   // materialize
         // A persistent WKWebsiteDataStore loads its cookies from disk ASYNCHRONOUSLY; getAllCookies
@@ -127,7 +142,7 @@ final class PlayerSession {
         var had = await hasAuthCookies()
         if !had {
             for _ in 0..<10 {
-                try? await Task.sleep(nanoseconds: 300_000_000)
+                await delay(0.3)
                 if await hasAuthCookies() { had = true; break }
             }
         }
@@ -138,28 +153,50 @@ final class PlayerSession {
         print("[PlayerSession] bootstrap: storeHadAuth=\(had) afterSeed=\(now)")
         // Retry the push until the backend (spawned async at launch) accepts it.
         for attempt in 0..<15 {
-            if await pushToBackend() { print("[PlayerSession] jar pushed (attempt \(attempt))"); break }
-            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            if await pushToBackend() { print("[PlayerSession] session jar pushed (attempt \(attempt))"); break }
+            await delay(1.0)
         }
         startKeepalive()
     }
 
-    /// Sign out: tear down the keepalive, drop the persistent profile, mint a fresh identifier so
-    /// the next sign-in starts clean.
+    /// Sign out: delete the store's cookies (keeping the same store identity so a fresh sign-in
+    /// re-seeds it cleanly — avoids the lazy-store staleness of minting a new identifier mid-run).
     func reset() async {
-        stopKeepalive()
         UserDefaults.standard.set(false, forKey: seededKey)
-        let old = storeUUID()
-        // Best-effort: clear cookies first (works even if a webview still holds the store), then
-        // remove the whole profile.
         let cookies = await allCookies()
         for c in cookies { await deleteCookie(c) }
-        UserDefaults.standard.set(UUID().uuidString, forKey: uuidKey)   // next store = new identity
-        try? await WKWebsiteDataStore.remove(forIdentifier: old)
     }
 
-    // MARK: Keepalive (Part 4) — wired below
+    // MARK: Keepalive
 
-    func startKeepalive() { /* implemented in Part 4 */ }
-    func stopKeepalive() { keepaliveTimer?.invalidate(); keepaliveTimer = nil; keepaliveWebView = nil }
+    /// A session that just sits idle stops rotating and decays. While the app runs and is signed in,
+    /// load a light authenticated page (~12 min cadence) so YouTube keeps issuing fresh
+    /// __Secure-*PSIDTS, then re-push. Self-guards: signed out, mid-watch (playback already rotates),
+    /// or rotated < 60s ago → skip. Reuses the offscreen store-warmup webview.
+    func startKeepalive() {
+        guard keepaliveTimer == nil else { return }
+        warmupWebView?.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
+        // Run-loop timers, NOT Task.sleep — a nested main-actor Task.sleep doesn't resume reliably in
+        // this plain-SwiftPM AppKit executable (Timer/asyncAfter integrate with the run loop and do).
+        DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self] in   // freshen after launch
+            Task { @MainActor in await self?.keepaliveTick() }
+        }
+        keepaliveTimer = Timer.scheduledTimer(withTimeInterval: 720, repeats: true) { [weak self] _ in
+            Task { @MainActor in await self?.keepaliveTick() }
+        }
+    }
+    func stopKeepalive() { keepaliveTimer?.invalidate(); keepaliveTimer = nil }
+
+    private func keepaliveTick() async {
+        if ProcessInfo.processInfo.environment["MT_SIGNED_OUT"] == "1" { return }
+        guard !watchOpen, Date().timeIntervalSince(lastRotateAt) > 60, await hasAuthCookies(),
+              let web = warmupWebView, let url = URL(string: "https://www.youtube.com/account") else { return }
+        print("[PlayerSession] keepalive: rotating session (youtube.com/account)")
+        web.load(URLRequest(url: url))
+        lastRotateAt = Date()
+        // Push the rotated jar after the load applies Set-Cookie.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 6) {
+            Task { @MainActor in await PlayerSession.shared.pushToBackend() }
+        }
+    }
 }

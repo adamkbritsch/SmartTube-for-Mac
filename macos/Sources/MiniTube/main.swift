@@ -14,6 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var cancellables = Set<AnyCancellable>()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        setvbuf(stdout, nil, _IONBF, 0)   // unbuffered stdout so diagnostics flush immediately
         MTDebug.startSession()    // truncate + open the debug log (only when flagged)
         MTDebug.log("[MediaCaps] AV1 hardware decode / supported=\(MediaCaps.supported) forced=\(MediaCaps.forceUnsupported)")
 

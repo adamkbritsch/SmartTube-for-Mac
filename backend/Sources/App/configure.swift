@@ -33,6 +33,9 @@ public func configure(_ app: Application) async throws {
 
     app.views.use(.leaf)
 
+    // The pushed cookie jar (POST /auth/cookies) is ~25KB+; raise the 16KB default body limit.
+    app.routes.defaultMaxBodySize = "1mb"
+
     // Shared state (settings + last-good ad rules persisted next to the package).
     let settingsPath = app.directory.workingDirectory + "settings.json"
     let adRulesPath = app.directory.workingDirectory + "adrules.json"
