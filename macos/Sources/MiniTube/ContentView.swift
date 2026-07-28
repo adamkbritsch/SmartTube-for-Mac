@@ -892,14 +892,17 @@ private struct FeedView: View {
     var search: String
     @Binding var selectedChip: String
 
-    private let chips: [(String, [String])] = [
-        ("All", []),
-        ("Science", ["Veritasium", "Kurzgesagt"]),
-        ("Education", ["MIT", "Veritasium", "Kurzgesagt"]),
-        ("Challenges", ["MrBeast"]),
-        ("Animation", ["Kurzgesagt", "Blender"]),
-        ("Music", ["Rick Astley"]),
-    ]
+    /// Filter chips derived from the channels ACTUALLY in the current feed. These used to be
+    /// hardcoded categories keyed to the seeded demo catalog's channels ("Science" → Veritasium /
+    /// Kurzgesagt, "Music" → Rick Astley…), which against a real personalized feed matched nothing
+    /// and produced an empty grid.
+    private var channelChips: [String] {
+        var counts: [String: Int] = [:]
+        for v in store.videos where !v.channel.isEmpty { counts[v.channel, default: 0] += 1 }
+        return counts.filter { $0.value >= 2 }                       // only channels worth filtering to
+            .sorted { $0.value != $1.value ? $0.value > $1.value : $0.key < $1.key }
+            .prefix(6).map(\.key)
+    }
 
     private var isSearch: Bool { !store.searchQuery.isEmpty }
 
@@ -907,10 +910,8 @@ private struct FeedView: View {
         if isSearch { return store.videos }        // server-side results, unfiltered
         if store.feedHeading != nil { return store.videos }   // subs/history/playlist, unfiltered
         if selectedChip == "HDR" { return store.hdrVideos }   // curated HDR + feed-personalized picks
-        let keywords = chips.first { $0.0 == selectedChip }?.1 ?? []
-        return store.videos.filter { v in
-            keywords.isEmpty || keywords.contains { v.channel.localizedCaseInsensitiveContains($0) }
-        }
+        if selectedChip == "All" { return store.videos }
+        return store.videos.filter { $0.channel == selectedChip }
     }
 
     var body: some View {
@@ -934,8 +935,9 @@ private struct FeedView: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 12) {
                         chip("Your custom feed", icon: "square.grid.2x2")
+                        chip("All", icon: nil)
                         chip("HDR", icon: "sun.max.fill")
-                        ForEach(chips, id: \.0) { chip($0.0, icon: nil) }
+                        ForEach(channelChips, id: \.self) { chip($0, icon: nil) }
                     }
                     .padding(.horizontal, 20).padding(.vertical, 12)
                 }
@@ -961,6 +963,30 @@ private struct FeedView: View {
                             .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
                     }
                     .frame(maxWidth: .infinity).padding(.vertical, 120)
+                } else if shown.isEmpty, let why = store.feedUnavailable, !isSearch, store.feedHeading == nil {
+                    // The feed is empty for a KNOWN reason. This used to render the seeded demo
+                    // catalog instead — real-looking videos that were not the user's — so a decayed
+                    // session or a transient failure was invisible. Say what happened.
+                    if why == "signedOut" {
+                        VStack(spacing: 10) {
+                            Image(systemName: "person.crop.circle").font(.system(size: 34)).foregroundStyle(.secondary)
+                            Text("Sign in to see your recommendations").font(.system(size: 14, weight: .medium))
+                            Text("Your home feed comes from your YouTube account.")
+                                .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                            Button("Sign in") { store.signIn() }.buttonStyle(.borderedProminent).clickable()
+                        }
+                        .frame(maxWidth: .infinity).padding(.vertical, 120)
+                    } else {
+                        VStack(spacing: 10) {
+                            Image(systemName: "arrow.clockwise").font(.system(size: 34)).foregroundStyle(.secondary)
+                            Text("Couldn't load your feed").font(.system(size: 14, weight: .medium))
+                            Text("YouTube didn't return your recommendations just now.")
+                                .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                            Button("Retry") { store.homeLoading = true; Task { await store.loadVideos() } }
+                                .buttonStyle(.borderedProminent).clickable()
+                        }
+                        .frame(maxWidth: .infinity).padding(.vertical, 120)
+                    }
                 } else {
                 VStack(alignment: .leading, spacing: 16) {
                     if !store.reachable {
@@ -1001,7 +1027,12 @@ private struct FeedView: View {
         .background(themeBackground(store.settings.theme))
         // Probe for HDR when the HDR chip is picked, and again as the feed grows.
         .onChange(of: selectedChip) { _, v in if v == "HDR" { Task { await store.loadHDR() } } }
-        .onChange(of: store.videos.count) { _, _ in if selectedChip == "HDR" { Task { await store.loadHDR() } } }
+        .onChange(of: store.videos.count) { _, _ in
+            if selectedChip == "HDR" { Task { await store.loadHDR() } }
+            // A refreshed feed may no longer contain the filtered channel — don't strand the user
+            // on a chip that now matches nothing.
+            else if selectedChip != "All", !channelChips.contains(selectedChip) { selectedChip = "All" }
+        }
     }
 
     private var isHDRTab: Bool { selectedChip == "HDR" && !isSearch && store.feedHeading == nil }

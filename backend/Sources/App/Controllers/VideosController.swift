@@ -23,6 +23,10 @@ struct VideoListItem: Content {
 struct FeedPageResponse: Content {
     let videos: [VideoListItem]
     let continuation: String?
+    /// Why the feed is empty, when it isn't genuinely empty: "signedOut" | "failed". Lets the client
+    /// show an honest state (sign-in prompt / Retry) instead of silently rendering nothing — or, as
+    /// it used to, rendering the seeded DEMO catalog as if it were the user's real feed.
+    var unavailable: String? = nil
 }
 
 struct WatchInfo: Content {
@@ -88,11 +92,17 @@ enum VideosController {
         return items
     }
 
-    /// Personalized home feed when signed in via the Firefox session; the seeded
-    /// demo catalog otherwise.
+    /// The user's personalized home feed — or an HONEST empty state.
+    ///
+    /// This used to fall back to `list(req)` (the seeded DEMO catalog: MrBeast, Veritasium,
+    /// Rick Astley, Big Buck Bunny…) whenever there was no session or the feed came back empty.
+    /// The client had no way to tell demo content from the real feed, so a decayed session — or a
+    /// single transient InnerTube failure, since homeFeed returns [] on any error — silently
+    /// rendered a plausible-looking grid of videos that were not the user's. Never again: report
+    /// WHY it's empty and let the UI say so.
     static func home(_ req: Request) async throws -> FeedPageResponse {
         guard let session = await req.auth.sessionIfConnected() else {
-            return FeedPageResponse(videos: try await list(req), continuation: nil)
+            return FeedPageResponse(videos: [], continuation: nil, unavailable: "signedOut")
         }
         let client = req.client
         let page = await req.state.feed("home") {
@@ -102,7 +112,7 @@ enum VideosController {
             // Signed in but the personalized home came back empty → the session may have decayed.
             // Probe it (rate-limited) so /api/account can report authSuspect and the client re-pushes.
             Task { await req.auth.suspectCheck(client: client) }
-            return FeedPageResponse(videos: try await list(req), continuation: nil)
+            return FeedPageResponse(videos: [], continuation: nil, unavailable: "failed")
         }
         return FeedPageResponse(videos: page.videos.map(listItem(from:)), continuation: page.continuation)
     }

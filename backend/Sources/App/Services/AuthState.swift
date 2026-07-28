@@ -35,6 +35,13 @@ actor AuthState {
         if let c = SessionJar.load(from: sessionPath) {
             jar = c
             jarSession = SessionJar.session(from: c)
+            // Adopt the persisted session immediately. Without this, `connected` stayed false after
+            // a BACKEND restart even though a perfectly good jar was on disk — and since
+            // sessionIfConnected() gates on `connected`, every personalized feed silently degraded
+            // (and used to serve the demo catalog) until something re-POSTed /auth/connect, which
+            // the client's one-way `connected` latch meant never happened. An invalid jar is caught
+            // by suspectCheck / the next /auth/connect.
+            connected = (jarSession != nil)
             print("[AuthState] loaded pushed jar: \(c.count) cookies, session=\(jarSession != nil)")
         }
     }

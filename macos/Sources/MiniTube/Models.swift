@@ -90,6 +90,8 @@ struct VideoListItem: Codable, Identifiable, Hashable {
 struct FeedPageResponse: Codable {
     let videos: [VideoListItem]
     let continuation: String?
+    /// Why an empty feed is empty: "signedOut" | "failed" | nil (genuinely empty). Decode-tolerant.
+    var unavailable: String? = nil
 }
 
 struct WatchInfo: Codable, Equatable {

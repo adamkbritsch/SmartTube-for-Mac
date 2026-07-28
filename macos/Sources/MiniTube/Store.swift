@@ -39,7 +39,11 @@ final class Store: ObservableObject {
     @Published var loadingMore = false     // fetching the next feed page
     @Published var searchQuery = ""        // non-empty → feed shows search results
     @Published var feedMode = "home"       // "home" | "subscriptions" — which feed the grid shows
-    @Published var homeLoading = true      // true until the first (personalized) home feed loads
+    @Published var homeLoading = true      // a feed load is in flight (re-armed on every feed nav)
+    /// Why the current feed is empty, when it isn't genuinely empty: "signedOut" | "failed".
+    /// Drives the honest empty states in FeedView (sign-in prompt / Retry) — the app must never
+    /// present demo content as the user's feed.
+    @Published var feedUnavailable: String?
     @Published var hdrVideos: [VideoListItem] = []   // HDR videos from the feed's channels (HDR chip)
     @Published var hdrLoading = false         // probing the feed's channels for HDR videos
     private var hdrProbedKey = ""             // which channel set we last probed
@@ -111,7 +115,23 @@ final class Store: ObservableObject {
             let wasSignedIn = account.signedIn
             if a != account { account = a }
             if a.signedIn && !a.authSuspect && device != nil { device = nil }   // sign-in truly good
-            if a.signedIn != wasSignedIn { await loadVideos() }                 // swap home feed ↔ catalog
+            if a.signedIn != wasSignedIn { await loadVideos() }                 // sign-in state flipped
+
+            // Reconcile the client's one-way `connected` latch with backend truth. If the BACKEND
+            // says signed out while we still think we're connected (it restarted, or a connect
+            // failed), clear the latch so autoConnectIfNeeded re-POSTs /auth/connect — otherwise
+            // that state was unrecoverable without relaunching the app, and every feed stayed dead.
+            if !a.signedIn && connected {
+                connected = false
+                repushAttempted = false
+            }
+            // Recovered (or the feed never loaded): pull the real feed now. Not gated on
+            // homeLoading — after a self-heal that flag is already false, which used to leave
+            // stale/placeholder content on screen indefinitely.
+            if a.signedIn && !a.authSuspect && (feedUnavailable != nil || videos.isEmpty),
+               channelId == nil, watchVideoId == nil, searchQuery.isEmpty {
+                await loadVideos()
+            }
 
             // Self-heal a decayed session. Signed in but the backend saw empty feeds → try ONE
             // silent re-export + re-validate (cookies may have just rotated mid-flight). If that
@@ -201,8 +221,11 @@ final class Store: ObservableObject {
 
     /// Logo tap: go to (and refresh) the home feed from anywhere.
     func goHome() {
-        watchVideoId = nil; watchInfo = nil; fullscreen = false; searchQuery = ""
-        channelId = nil; channelInfo = nil; feedMode = "home"; playlists = nil; shortsFeed = nil
+        // Clear the outgoing feed and re-arm the loading state like every other nav method
+        // (openSubscriptions/openHistory/…) — otherwise the logo click renders whatever was
+        // on screen (or a fresh but unmasked response) with no skeleton in between.
+        clearNav()
+        videos = []; feedContinuation = nil; feedUnavailable = nil; homeLoading = true
         Task { await loadVideos() }
     }
 
@@ -458,9 +481,14 @@ final class Store: ObservableObject {
             guard feedMode == mode, channelId == nil else { return }   // nav changed during fetch/decode
             videos = page.videos
             feedContinuation = page.continuation
+            feedUnavailable = page.videos.isEmpty ? page.unavailable : nil
             reachable = true
-            homeLoading = false   // first feed is in → stop showing the loading state
-        } catch { reachable = false }   // transport failure (decode issues logged in helper)
+            homeLoading = false   // feed is in → stop showing the loading state
+        } catch {
+            reachable = false     // transport failure (decode issues logged in helper)
+            homeLoading = false   // never leave the skeleton up forever
+            if videos.isEmpty { feedUnavailable = "failed" }
+        }
     }
 
     /// Search YouTube; results replace the feed until cleared.
