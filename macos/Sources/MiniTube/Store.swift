@@ -89,7 +89,11 @@ final class Store: ObservableObject {
         // connect RESULT (not tied to homeLoading, which any nav clears; and not latched
         // before the load, which stranded the spinner on a transient load failure).
         if !connected {
-            if account.signedIn {
+            // Only take the shortcut when the backend is signed in WITH a real identity. It can
+            // report signedIn purely from adopting a persisted session jar, which carries no
+            // profile/subscriptions — taking the shortcut then meant we never POSTed /auth/connect,
+            // so the identity never loaded and the UI showed "Not signed in" despite working feeds.
+            if account.signedIn && account.profile != nil {
                 connected = true
             } else {
                 guard let url = URL(string: "\(base)/auth/connect") else { return }

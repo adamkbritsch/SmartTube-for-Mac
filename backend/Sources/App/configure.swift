@@ -68,6 +68,25 @@ extension Application {
             if let rules = await UBlockListService.fetch(client: app.client, logger: app.logger) {
                 await app.state.setUBlock(rules)
             }
+            // A jar adopted at boot marks us connected but carries NO identity — fetch profile +
+            // subscriptions so /api/account is truthful. Without this the API reported
+            // `signedIn: true` with a nil profile and no subscriptions, which reads as "not signed
+            // in" in the UI (and suppressed the client's own connect, so it never self-corrected).
+            // A jar that can't produce an identity is stale → stop claiming to be signed in.
+            if await app.auth.hasJar, await app.auth.profile == nil, let s = await app.auth.session() {
+                async let p = InnerTube.profile(session: s, client: app.client)
+                async let subsFetch = InnerTube.subscriptions(session: s, client: app.client)
+                let (prof, subs) = await (p, subsFetch)
+                if prof != nil || !subs.isEmpty {
+                    await app.auth.setProfile(prof ?? .init(name: "My YouTube", email: "", picture: ""))
+                    await app.auth.setSubscriptions(subs)
+                    app.logger.info("adopted persisted session (\(subs.count) subscriptions)")
+                } else {
+                    await app.auth.setConnected(false)
+                    app.logger.warning("persisted session produced no identity — not signed in")
+                }
+            }
+
             // uBO YouTube ad-strip rules (uAssets) — the live "use the updates" path.
             if let ad = await AdRuleService.fetch(client: app.client, logger: app.logger) {
                 await app.state.setAdRules(ad)
