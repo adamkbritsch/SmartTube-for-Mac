@@ -152,6 +152,10 @@ struct WatchPage: View {
     @State private var selectedChip = "All"
     @State private var autoplay = true
     @State private var descExpanded = false
+    // Mini-player state: the reserved slot's live frame, plus the user's dragged offset.
+    @State private var slotFrame: CGRect = .zero
+    @State private var miniDrag: CGSize = .zero
+    @State private var dragStart: CGSize = .zero
     // Engagement state (backed by real account writes via the backend).
     @State private var subscribed = false
     @State private var likeState = 0          // -1 dislike, 0 none, 1 like
@@ -202,21 +206,103 @@ struct WatchPage: View {
                       // Watched past the threshold → log the view to YouTube history.
                       Task { @MainActor in store.markWatched(vid) }
                   })
-            .aspectRatio(16.0 / 9.0, contentMode: .fit)
-            .frame(maxWidth: .infinity)
             .background(Color.black)
             .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
     var body: some View {
-        // ONE scroll view over BOTH columns so the up-next rail scrolls together with the
-        // player/description/comments (was two independent ScrollViews). A vertical ScrollView
-        // fixes the cross-axis width, so the main column takes the remaining space and the rail
-        // stays a fixed 402pt beside it.
+        // The player FLOATS above the scroll content instead of living inside it. It is one single
+        // view instance whose frame is animated between "docked over its placeholder" and "mini in
+        // the corner" — it is never moved between two branches of the view tree, because that would
+        // make SwiftUI tear down and rebuild the WKWebView and RELOAD the video mid-playback.
+        GeometryReader { outer in
+            ZStack(alignment: .topLeading) {
+                scrollBody
+                floatingPlayer(in: outer.size)
+            }
+            .coordinateSpace(name: Self.watchSpace)
+            .clipped()
+            .onPreferenceChange(PlayerSlotFrameKey.self) { slotFrame = $0 }
+            .onChange(of: videoId) { _, _ in miniDrag = .zero }   // new video → re-center the mini
+        }
+    }
+
+    /// The mini player's size and where it parks when it isn't docked.
+    private static let miniWidth: CGFloat = 360
+    private static let watchSpace = "watchArea"
+    private var miniSize: CGSize { CGSize(width: Self.miniWidth, height: (Self.miniWidth * 9 / 16).rounded()) }
+
+    /// Docked while the player's reserved slot is still meaningfully on screen; mini once it has
+    /// scrolled away (i.e. you're reading the description/comments).
+    private var isMini: Bool { slotFrame.width > 1 && slotFrame.maxY < 96 }
+
+    @ViewBuilder private func floatingPlayer(in container: CGSize) -> some View {
+        // Fallback for the first frame, before the placeholder has reported its geometry — never
+        // hand the WKWebView a 0x0 frame.
+        let railW: CGFloat = store.settings.theaterMode ? 0 : 426
+        let fallbackW = max(320, container.width - railW - 40)
+        let docked = !isMini
+        let hasSlot = slotFrame.width > 1
+
+        let w = docked ? (hasSlot ? slotFrame.width : fallbackW) : miniSize.width
+        let h = docked ? (hasSlot ? slotFrame.height : fallbackW * 9 / 16) : miniSize.height
+        let miniX = min(max(16 + miniDrag.width, 8), max(8, container.width - miniSize.width - 8))
+        let miniY = min(max(16 + miniDrag.height, 8), max(8, container.height - miniSize.height - 8))
+        let x = docked ? (hasSlot ? slotFrame.minX : 20) : miniX
+        let y = docked ? (hasSlot ? slotFrame.minY : 20) : miniY
+
+        playerSlot
+            .frame(width: max(1, w), height: max(1, h))
+            // Shadow goes on a BACKGROUND shape, never on the player itself: a .shadow() wrapping
+            // the WKWebView forces it into an offscreen-rendered layer, which is the same class of
+            // layer-compositing trap that once made 4K video decode but paint solid black.
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Color.black)
+                    .shadow(color: .black.opacity(isMini ? 0.5 : 0), radius: isMini ? 18 : 0, y: isMini ? 8 : 0)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .strokeBorder(Color.white.opacity(isMini ? 0.14 : 0), lineWidth: 1)
+            )
+            .offset(x: x, y: y)
+            .animation(.easeInOut(duration: 0.22), value: isMini)
+            .gesture(
+                DragGesture(minimumDistance: 2)
+                    .onChanged { g in
+                        guard isMini else { return }   // only draggable as a mini player
+                        miniDrag = CGSize(width: dragStart.width + g.translation.width,
+                                          height: dragStart.height + g.translation.height)
+                    }
+                    .onEnded { _ in
+                        guard isMini else { return }
+                        // Persist the clamped position so the next drag starts where it sits.
+                        miniDrag = CGSize(width: min(max(16 + miniDrag.width, 8),
+                                                     max(8, container.width - miniSize.width - 8)) - 16,
+                                          height: min(max(16 + miniDrag.height, 8),
+                                                      max(8, container.height - miniSize.height - 8)) - 16)
+                        dragStart = miniDrag
+                    }
+            )
+    }
+
+    // ONE scroll view over BOTH columns so the up-next rail scrolls together with the
+    // player/description/comments (was two independent ScrollViews). A vertical ScrollView
+    // fixes the cross-axis width, so the main column takes the remaining space and the rail
+    // stays a fixed 402pt beside it.
+    private var scrollBody: some View {
         ScrollView {
             HStack(alignment: .top, spacing: 24) {
                 VStack(alignment: .leading, spacing: 12) {
-                    playerSlot
+                    // Reserves the player's space in the layout and reports where it is; the real
+                    // player is drawn over it by floatingPlayer.
+                    Color.clear
+                        .aspectRatio(16.0 / 9.0, contentMode: .fit)
+                        .frame(maxWidth: .infinity)
+                        .background(GeometryReader { g in
+                            Color.clear.preference(key: PlayerSlotFrameKey.self,
+                                                   value: g.frame(in: .named(Self.watchSpace)))
+                        })
                     playerBar
 
                     Text(info?.title ?? "Loading…")
@@ -264,6 +350,13 @@ struct WatchPage: View {
         }
         .onAppear { seedEngagement() }
         .onChange(of: store.watchInfo?.videoId) { _, _ in seedEngagement() }
+    }
+
+    /// Where the player's reserved slot currently sits (in the watch area's coordinate space).
+    /// Drives the docked ↔ mini transition as the page scrolls.
+    private struct PlayerSlotFrameKey: PreferenceKey {
+        static let defaultValue: CGRect = .zero
+        static func reduce(value: inout CGRect, nextValue: () -> CGRect) { value = nextValue() }
     }
 
     /// Reflect the real subscribed / like state once this video's metadata arrives.
