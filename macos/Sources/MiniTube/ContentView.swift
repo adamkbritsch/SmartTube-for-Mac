@@ -162,6 +162,7 @@ struct WatchPage: View {
     @State private var shareCopied = false
     @State private var seededVideoId = ""     // metadata state applied once per video
     @State private var likeWritesInFlight = 0
+    @State private var seededLikeState = 0     // like state the server's count already reflects
     @State private var subscribeWritesInFlight = 0
 
     private var info: WatchInfo? { store.watchInfo?.videoId == videoId ? store.watchInfo : nil }
@@ -221,6 +222,17 @@ struct WatchPage: View {
                 floatingPlayer(in: outer.size, origin: outer.frame(in: .global).origin)
             }
             .clipped()
+            .overlay(alignment: .bottom) {
+                if let err = store.feedbackError {
+                    Label(err, systemImage: "exclamationmark.triangle.fill")
+                        .font(.system(size: 13)).foregroundStyle(.orange)
+                        .padding(.horizontal, 16).padding(.vertical, 11)
+                        .background(RoundedRectangle(cornerRadius: 10).fill(Color.primary.opacity(0.12)))
+                        .background(RoundedRectangle(cornerRadius: 10).fill(themeBackground(store.settings.theme)))
+                        .padding(.bottom, 24)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+            }
             .onChange(of: videoId) { _, _ in miniDrag = .zero; dragStart = .zero }
         }
     }
@@ -373,7 +385,11 @@ struct WatchPage: View {
         guard let i = info, seededVideoId != videoId else { return }
         seededVideoId = videoId
         if subscribeWritesInFlight == 0 { subscribed = i.subscribed ?? false }
-        if likeWritesInFlight == 0 { likeState = i.likeStatus ?? 0 }
+        if likeWritesInFlight == 0 {
+            MTDebug.log("[like] seed from server likeStatus=\(String(describing: i.likeStatus)) (was \(likeState))")
+            likeState = i.likeStatus ?? 0
+            seededLikeState = likeState   // the count already includes a like the server knew about
+        }
     }
 
     // Under-player bar: live resolution/HDR readout, plus theater + max-quality quick toggles.
@@ -477,20 +493,31 @@ struct WatchPage: View {
             .disabled((info?.channelId ?? "").isEmpty)
             Spacer()
             // Joined like | dislike control (matches YouTube) — writes to the real account.
+            // The ACTIVE side gets a filled accent pill, not just a tinted glyph. Previously the
+            // only feedback was a subtle icon fill — and because YouTube's count reads the same
+            // either way ("15K" +1 is still "15K"), a successful like looked like nothing had
+            // happened, so it was easy to click again and silently undo it.
             HStack(spacing: 0) {
                 Button { applyLike(1) } label: {
-                    Label(info?.likes ?? "", systemImage: likeState == 1 ? "hand.thumbsup.fill" : "hand.thumbsup")
-                        .font(.system(size: 13, weight: .medium)).padding(.horizontal, 14).frame(height: 36)
-                        .foregroundStyle(likeState == 1 ? AnyShapeStyle(accent) : AnyShapeStyle(Color.primary))
+                    Label(likeCountText, systemImage: likeState == 1 ? "hand.thumbsup.fill" : "hand.thumbsup")
+                        .font(.system(size: 13, weight: likeState == 1 ? .semibold : .medium))
+                        .padding(.horizontal, 14).frame(height: 36)
+                        .foregroundStyle(likeState == 1 ? AnyShapeStyle(Color.white) : AnyShapeStyle(Color.primary))
+                        .background(Capsule().fill(likeState == 1 ? AnyShapeStyle(accent) : AnyShapeStyle(Color.clear)))
                 }.buttonStyle(.plain).clickable()
+                .help(likeState == 1 ? "You liked this — click again to remove" : "Like")
                 Divider().frame(height: 18).opacity(0.4)
                 Button { applyLike(-1) } label: {
                     Image(systemName: likeState == -1 ? "hand.thumbsdown.fill" : "hand.thumbsdown")
-                        .font(.system(size: 13, weight: .medium)).padding(.horizontal, 14).frame(height: 36)
-                        .foregroundStyle(likeState == -1 ? AnyShapeStyle(accent) : AnyShapeStyle(Color.primary))
+                        .font(.system(size: 13, weight: .medium))
+                        .padding(.horizontal, 14).frame(height: 36)
+                        .foregroundStyle(likeState == -1 ? AnyShapeStyle(Color.white) : AnyShapeStyle(Color.primary))
+                        .background(Capsule().fill(likeState == -1 ? AnyShapeStyle(accent) : AnyShapeStyle(Color.clear)))
                 }.buttonStyle(.plain).clickable()
+                .help(likeState == -1 ? "You disliked this — click again to remove" : "Dislike")
             }
             .background(Capsule().fill(Color.primary.opacity(0.1)))
+            .animation(.easeOut(duration: 0.15), value: likeState)
             Button { copyShareURL() } label: {
                 Label(shareCopied ? "Copied!" : "Share",
                       systemImage: shareCopied ? "checkmark" : "arrowshape.turn.up.right")
@@ -522,6 +549,17 @@ struct WatchPage: View {
     }
 
     // Real account write: like / dislike / clear. `target` is 1 (like) or -1 (dislike).
+    /// The like count with the user's own like folded in, so the number moves the moment they
+    /// tap. YouTube's formatted count ("15K") wouldn't visibly change on ±1, so an exact count
+    /// is adjusted and a rounded one is left alone (bumping "15K" to "15K" would be noise).
+    private var likeCountText: String {
+        let base = info?.likes ?? ""
+        guard likeState == 1, seededLikeState != 1 else { return base }
+        let digits = base.filter { $0.isNumber }
+        guard !base.isEmpty, base.allSatisfy({ $0.isNumber || $0 == "," }), let n = Int(digits) else { return base }
+        return (n + 1).formatted(.number)
+    }
+
     private func applyLike(_ target: Int) {
         let old = likeState
         let newState = likeState == target ? 0 : target
@@ -529,11 +567,20 @@ struct WatchPage: View {
         likeWritesInFlight += 1
         withAnimation(.easeOut(duration: 0.12)) { likeState = newState }
         let action = newState == 1 ? "like" : (newState == -1 ? "dislike" : "none")
+        MTDebug.log("[like] tap target=\(target) old=\(old) new=\(newState) action=\(action) video=\(forVideo)")
         Task {
             let ok = await store.setLike(videoId: forVideo, state: action)
             await MainActor.run {
                 likeWritesInFlight -= 1
+                MTDebug.log("[like] result ok=\(ok) stateNow=\(likeState) sameVideo=\(store.watchVideoId == forVideo)")
                 guard !ok, store.watchVideoId == forVideo else { return }
+                MTDebug.log("[like] REVERTING to \(old)")
+                // Say so — a silent snap-back is indistinguishable from "the click didn't land".
+                store.feedbackError = target == 1 ? "Couldn't like this video" : "Couldn't dislike this video"
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 4_000_000_000)
+                    withAnimation { store.feedbackError = nil }
+                }
                 withAnimation(.easeOut(duration: 0.2)) { likeState = old }
             }
         }
