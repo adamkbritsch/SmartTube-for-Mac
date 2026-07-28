@@ -453,6 +453,44 @@ struct WatchPage: View {
 
     // Hidden entirely until it has something to show — otherwise it's an empty gray card that
     // flashes on every video open (info arrives async) and lingers for videos with no stats/desc.
+    /// Description text with real, clickable links. YouTube truncates/shortens the DISPLAY text
+    /// (`https://linustechtips.com/t…`) and keeps the true destination in the run's endpoint, so we
+    /// apply `.link` at the ranges the backend extracted (UTF-16 offsets, bounds-checked) rather
+    /// than regexing the visible text. Anything the runs didn't cover — bare URLs in descriptions
+    /// that predate attributedDescription — is caught by NSDataDetector.
+    static func attributedDescription(_ text: String, links: [DescriptionLink]) -> AttributedString {
+        var out = AttributedString(text)
+        let utf16Count = text.utf16.count
+        var covered: [Range<Int>] = []
+
+        for l in links {
+            guard l.start >= 0, l.length > 0, l.start + l.length <= utf16Count,
+                  let url = URL(string: l.url) else { continue }
+            guard let lo = String.Index(String.UTF16View.Index(utf16Offset: l.start, in: text), within: text),
+                  let hi = String.Index(String.UTF16View.Index(utf16Offset: l.start + l.length, in: text), within: text),
+                  let range = Range(lo..<hi, in: out) else { continue }
+            out[range].link = url
+            out[range].underlineStyle = .single
+            covered.append(l.start..<(l.start + l.length))
+        }
+
+        // Fallback for bare URLs no run covered.
+        if let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) {
+            let ns = text as NSString
+            for m in detector.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+                guard let url = m.url, url.scheme == "http" || url.scheme == "https" else { continue }
+                let r = m.range.location..<(m.range.location + m.range.length)
+                if covered.contains(where: { $0.overlaps(r) }) { continue }
+                guard let lo = String.Index(String.UTF16View.Index(utf16Offset: r.lowerBound, in: text), within: text),
+                      let hi = String.Index(String.UTF16View.Index(utf16Offset: r.upperBound, in: text), within: text),
+                      let range = Range(lo..<hi, in: out) else { continue }
+                out[range].link = url
+                out[range].underlineStyle = .single
+            }
+        }
+        return out
+    }
+
     @ViewBuilder private var descriptionBox: some View {
         let views = (info?.views ?? "")
         let published = (info?.published ?? "")
@@ -464,13 +502,19 @@ struct WatchPage: View {
                     if !published.isEmpty { Text(published).font(.system(size: 13, weight: .semibold)).foregroundStyle(.secondary) }
                 }
                 if !desc.isEmpty {
-                    Text(desc).font(.system(size: 13)).textSelection(.enabled)
+                    Text(Self.attributedDescription(desc, links: info?.descriptionLinks ?? []))
+                        .font(.system(size: 13)).textSelection(.enabled)
+                        .tint(Color(red: 0.24, green: 0.65, blue: 1))
                         .lineLimit(descExpanded ? nil : 3)
                         .fixedSize(horizontal: false, vertical: true)
-                    Button(descExpanded ? "Show less" : "…more") {
-                        withAnimation(.easeInOut(duration: 0.15)) { descExpanded.toggle() }
+                    // Only offer the toggle when there's actually more to show (a 1-2 line
+                    // description used to display a "…more" that visibly did nothing).
+                    if descExpanded || desc.count > 140 || desc.contains("\n") {
+                        Button(descExpanded ? "Show less" : "…more") {
+                            withAnimation(.easeInOut(duration: 0.15)) { descExpanded.toggle() }
+                        }
+                        .buttonStyle(.plain).font(.system(size: 13, weight: .semibold)).foregroundStyle(.secondary).clickable()
                     }
-                    .buttonStyle(.plain).font(.system(size: 13, weight: .semibold)).foregroundStyle(.secondary).clickable()
                 }
             }
             .padding(12).frame(maxWidth: .infinity, alignment: .leading)

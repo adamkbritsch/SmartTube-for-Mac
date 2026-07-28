@@ -538,6 +538,7 @@ enum InnerTube {
         let views: String
         let published: String
         let description: String
+        let descriptionLinks: [DescriptionLink]
         let likes: String?
         let recommendations: [FeedVideo]
         let commentCount: String
@@ -545,6 +546,39 @@ enum InnerTube {
         let commentsContinuation: String?
         let subscribed: Bool       // is the signed-in user already subscribed to this channel
         let likeStatus: Int        // -1 disliked, 0 none, 1 liked (signed-in user's current state)
+    }
+
+    /// Real link targets inside a description. YouTube renders links as DISPLAY text
+    /// (`youtu.be/…`, `bit.ly/…`, or a truncated `example.com/very/lo...`) and keeps the true
+    /// destination in the run's endpoint — so the flat `content` string alone loses it. The
+    /// `attributedDescription` object carries `commandRuns[]` with `{startIndex, length, onTap…url}`,
+    /// and outbound links are wrapped as `youtube.com/redirect?q=<encoded real URL>`, unwrapped here.
+    /// Offsets are UTF-16 code units (JS string semantics); the client re-validates them.
+    static func descriptionLinks(_ node: Any?) -> [DescriptionLink] {
+        guard let d = node as? [String: Any],
+              let content = d["content"] as? String,
+              let runs = d["commandRuns"] as? [[String: Any]] else { return [] }
+        let utf16 = Array(content.utf16)
+        var out: [DescriptionLink] = []
+        for run in runs {
+            guard let start = run["startIndex"] as? Int,
+                  let len = run["length"] as? Int,
+                  start >= 0, len > 0, start + len <= utf16.count else { continue }
+            // The endpoint URL lives a few keys down; take whichever is present.
+            guard var url = firstValue("url", run["onTap"]) as? String, !url.isEmpty else { continue }
+            url = unwrapRedirect(url)
+            guard url.hasPrefix("http://") || url.hasPrefix("https://") else { continue }
+            let display = String(decoding: utf16[start..<(start + len)], as: UTF16.self)
+            out.append(DescriptionLink(text: display, url: url, start: start, length: len))
+        }
+        return out
+    }
+
+    /// `https://www.youtube.com/redirect?q=<percent-encoded target>` → the target.
+    private static func unwrapRedirect(_ url: String) -> String {
+        guard url.contains("/redirect?"), let comps = URLComponents(string: url),
+              let q = comps.queryItems?.first(where: { $0.name == "q" })?.value, !q.isEmpty else { return url }
+        return q
     }
 
     static func watchInfo(videoId: String, session: FirefoxSession.Session?, client: Client) async -> WatchMeta? {
@@ -588,6 +622,7 @@ enum InnerTube {
             views: text(dig(vcr, "viewCount")) ?? "",
             published: text(dig(pri, "relativeDateText")) ?? "",
             description: text(firstValue("attributedDescription", sec)) ?? text(dig(sec, "description")) ?? "",
+            descriptionLinks: descriptionLinks(firstValue("attributedDescription", sec)),
             likes: likeCount(pri),
             recommendations: recOrder.compactMap { recAcc[$0] },
             commentCount: commentCount,

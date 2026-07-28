@@ -38,6 +38,8 @@ struct WatchInfo: Content {
     let views: String
     let published: String
     let description: String
+    /// Real link targets + their character ranges within `description` (see InnerTube.descriptionLinks).
+    let descriptionLinks: [DescriptionLink]
     let likes: String?
     let recommendations: [VideoListItem]
     let commentCount: String
@@ -163,7 +165,7 @@ enum VideosController {
         return WatchInfo(
             videoId: id, title: m.title, channel: m.channel, channelId: m.channelId,
             subscribers: m.subscribers, views: m.views, published: m.published,
-            description: m.description, likes: m.likes,
+            description: m.description, descriptionLinks: m.descriptionLinks, likes: m.likes,
             recommendations: m.recommendations.map(listItem(from:)),
             commentCount: m.commentCount, comments: m.comments,
             commentsContinuation: m.commentsContinuation,

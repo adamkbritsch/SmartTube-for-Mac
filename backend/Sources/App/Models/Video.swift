@@ -15,6 +15,16 @@ struct Video: Content, Sendable {
     }
 }
 
+/// A link inside a video description: the visible text, its REAL destination (YouTube shortens the
+/// display text and hides the target in the run's endpoint), and the run's range within the flat
+/// description string in UTF-16 code units.
+struct DescriptionLink: Content, Sendable {
+    let text: String
+    let url: String
+    let start: Int
+    let length: Int
+}
+
 /// One community-marked segment from the SponsorBlock API. `segment` is `[start, end]`
 /// in seconds.
 struct SponsorSegment: Content, Sendable {

@@ -94,6 +94,16 @@ struct FeedPageResponse: Codable {
     var unavailable: String? = nil
 }
 
+/// A link inside a description: visible text, its REAL destination (YouTube truncates/shortens the
+/// display text and hides the true target in the run's endpoint), and the run's range within the
+/// flat description string in UTF-16 code units.
+struct DescriptionLink: Codable, Equatable, Hashable {
+    let text: String
+    let url: String
+    let start: Int
+    let length: Int
+}
+
 struct WatchInfo: Codable, Equatable {
     let videoId: String
     let title: String
@@ -103,6 +113,7 @@ struct WatchInfo: Codable, Equatable {
     let views: String
     let published: String
     let description: String
+    let descriptionLinks: [DescriptionLink]
     let likes: String?
     let recommendations: [VideoListItem]
     let commentCount: String
@@ -123,6 +134,7 @@ struct WatchInfo: Codable, Equatable {
         views = (try? c.decode(String.self, forKey: .views)) ?? ""
         published = (try? c.decode(String.self, forKey: .published)) ?? ""
         description = (try? c.decode(String.self, forKey: .description)) ?? ""
+        descriptionLinks = (try? c.decode([DescriptionLink].self, forKey: .descriptionLinks)) ?? []
         likes = try? c.decode(String.self, forKey: .likes)
         recommendations = (try? c.decode([VideoListItem].self, forKey: .recommendations)) ?? []
         commentCount = (try? c.decode(String.self, forKey: .commentCount)) ?? ""

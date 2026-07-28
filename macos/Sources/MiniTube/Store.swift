@@ -457,8 +457,13 @@ final class Store: ObservableObject {
         }
     }
 
+    /// Open an external link in the user's browser. Restricted to http/https: description links
+    /// come from a remote payload, and NSWorkspace.open would otherwise happily launch `file://`,
+    /// custom app schemes, etc.
     func openURL(_ string: String) {
-        if let url = URL(string: string) { NSWorkspace.shared.open(url) }
+        guard let url = URL(string: string), let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https" else { return }
+        NSWorkspace.shared.open(url)
     }
 
     func loadVideos() async {
