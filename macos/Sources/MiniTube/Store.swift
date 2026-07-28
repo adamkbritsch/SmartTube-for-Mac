@@ -388,9 +388,32 @@ final class Store: ObservableObject {
     @Published var loadingComments = false
     private var commentsContinuation: String?
 
+    /// Description-link previews for the CURRENT video, keyed by URL. Populated only when the user
+    /// expands the description — nothing is fetched for videos merely scrolled past.
+    @Published var linkPreviews: [String: LinkPreview] = [:]
+    private var linkPreviewsInFlight: Set<String> = []
+
+    /// Fetch previews for a description's links (deduped, capped). Safe to call repeatedly:
+    /// already-loaded or in-flight URLs are skipped, so collapse/re-expand never refetches.
+    func loadLinkPreviews(_ links: [DescriptionLink]) async {
+        var seen = Set<String>()
+        let urls = links.map(\.url).filter { seen.insert($0).inserted }.prefix(6)
+        for u in urls where linkPreviews[u] == nil && !linkPreviewsInFlight.contains(u) {
+            linkPreviewsInFlight.insert(u)
+            defer { linkPreviewsInFlight.remove(u) }
+            guard var comps = URLComponents(string: "\(base)/api/linkpreview") else { continue }
+            comps.queryItems = [URLQueryItem(name: "url", value: u)]
+            guard let url = comps.url,
+                  let (data, _) = try? await URLSession.shared.data(from: url),
+                  let p = try? JSONDecoder().decode(LinkPreview.self, from: data) else { continue }
+            if p.hasContent { linkPreviews[u] = p }
+        }
+    }
+
     func openWatch(_ id: String) {
         watchVideoId = id
         watchInfo = nil
+        linkPreviews = [:]   // per-video: don't carry another video's link cards over
         comments = []; commentsContinuation = nil
         playback.height = 0; playback.enhanceActive = false; playback.hdr = false   // reset the quality readout for the new video
         Task { [id] in

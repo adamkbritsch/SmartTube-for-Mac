@@ -94,6 +94,22 @@ enum VideosController {
         return items
     }
 
+    /// Metadata for ONE description link (Gmail-style preview card). Called only when the user
+    /// expands a description — never for videos merely scrolled past. Guards live in
+    /// LinkPreviewService.validated (this is the only endpoint taking a remote-supplied URL).
+    static func linkPreview(_ req: Request) async throws -> LinkPreview {
+        guard let url = try? req.query.get(String.self, at: "url"), !url.isEmpty else {
+            throw Abort(.badRequest, reason: "url required")
+        }
+        guard LinkPreviewService.validated(url) != nil else {
+            throw Abort(.badRequest, reason: "unsupported url")
+        }
+        if let hit = await req.state.cachedLinkPreview(url) { return hit }
+        let fresh = await LinkPreviewService.fetch(url: url, client: req.client, logger: req.logger)
+        await req.state.storeLinkPreview(fresh, url)
+        return fresh
+    }
+
     /// The user's personalized home feed — or an HONEST empty state.
     ///
     /// This used to fall back to `list(req)` (the seeded DEMO catalog: MrBeast, Veritasium,

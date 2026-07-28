@@ -453,6 +453,13 @@ struct WatchPage: View {
 
     // Hidden entirely until it has something to show — otherwise it's an empty gray card that
     // flashes on every video open (info arrives async) and lingers for videos with no stats/desc.
+    /// Deduped, capped set of links worth previewing (a description often repeats the same
+    /// sponsor URL several times).
+    private func uniqueLinks(_ links: [DescriptionLink]) -> [DescriptionLink] {
+        var seen = Set<String>()
+        return links.filter { seen.insert($0.url).inserted }.prefix(6).map { $0 }
+    }
+
     /// Description text with real, clickable links. YouTube truncates/shortens the DISPLAY text
     /// (`https://linustechtips.com/t…`) and keeps the true destination in the run's endpoint, so we
     /// apply `.link` at the ranges the backend extracted (UTF-16 offsets, bounds-checked) rather
@@ -515,11 +522,69 @@ struct WatchPage: View {
                         }
                         .buttonStyle(.plain).font(.system(size: 13, weight: .semibold)).foregroundStyle(.secondary).clickable()
                     }
+                    // Gmail-style link cards — ONLY once expanded, so nothing is fetched (and no
+                    // third-party site learns you opened the video) for descriptions you never read.
+                    if descExpanded {
+                        let links = uniqueLinks(info?.descriptionLinks ?? [])
+                        if !links.isEmpty {
+                            Divider().opacity(0.15).padding(.top, 4)
+                            VStack(alignment: .leading, spacing: 8) {
+                                ForEach(links, id: \.url) { l in
+                                    LinkPreviewCard(link: l, preview: store.linkPreviews[l.url])
+                                        .onTapGesture { store.openURL(l.url) }
+                                }
+                            }
+                            .task(id: videoId) { await store.loadLinkPreviews(links) }
+                        }
+                    }
                 }
             }
             .padding(12).frame(maxWidth: .infinity, alignment: .leading)
             .background(Color.primary.opacity(0.06)).clipShape(RoundedRectangle(cornerRadius: 12))
         }
+    }
+}
+
+/// A Gmail-style preview card for one description link. Shown only under an EXPANDED description.
+/// Degrades honestly: until (or unless) metadata arrives it still shows the real destination host,
+/// so the card always answers "where does this go?" even for sites that block preview fetches.
+private struct LinkPreviewCard: View {
+    let link: DescriptionLink
+    let preview: LinkPreview?
+    @State private var hover = false
+
+    private var host: String {
+        preview?.host ?? URL(string: link.url)?.host?.replacingOccurrences(of: "www.", with: "") ?? link.url
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            if let img = preview?.image, !img.isEmpty {
+                CachedImage(url: img) { Rectangle().fill(Color.primary.opacity(0.12)) }
+                    .frame(width: 96, height: 54).clipped().clipShape(RoundedRectangle(cornerRadius: 6))
+            } else {
+                RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.10))
+                    .frame(width: 96, height: 54)
+                    .overlay(Image(systemName: "link").font(.system(size: 16)).foregroundStyle(.secondary))
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(preview?.title ?? link.url)
+                    .font(.system(size: 13, weight: .semibold)).lineLimit(2)
+                    .foregroundStyle(.primary)
+                if let d = preview?.description, !d.isEmpty {
+                    Text(d).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(2)
+                }
+                Text(preview?.siteName.map { "\($0) · \(host)" } ?? host)
+                    .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(8)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color.primary.opacity(hover ? 0.10 : 0.05)))
+        .contentShape(Rectangle())
+        .onHover { hover = $0 }
+        .clickable()
+        .help(link.url)
     }
 }
 

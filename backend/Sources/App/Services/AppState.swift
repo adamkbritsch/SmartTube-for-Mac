@@ -81,6 +81,27 @@ actor AppState {
 
     // MARK: DeArrow cache
 
+    // MARK: Link previews (URL-keyed → unlike the id-keyed caches above this one is UNBOUNDED in
+    // principle, so it's capped as well as TTL'd). Failures are cached too: a dead link shouldn't
+    // be refetched every time a description is expanded.
+
+    private var linkCache: [String: (Date, LinkPreview)] = [:]
+    private let linkTTL: TimeInterval = 6 * 60 * 60
+    private let linkCacheMax = 500
+
+    func cachedLinkPreview(_ url: String) -> LinkPreview? {
+        guard let (date, p) = linkCache[url], Date().timeIntervalSince(date) < linkTTL else { return nil }
+        return p
+    }
+    func storeLinkPreview(_ p: LinkPreview, _ url: String) {
+        if linkCache.count >= linkCacheMax {
+            // Cheap eviction: drop the oldest quarter rather than growing without bound.
+            let cutoff = linkCache.sorted { $0.value.0 < $1.value.0 }.prefix(linkCacheMax / 4).map(\.key)
+            for k in cutoff { linkCache.removeValue(forKey: k) }
+        }
+        linkCache[url] = (Date(), p)
+    }
+
     func cachedBranding(_ id: String) -> DeArrowClient.Resolved? {
         guard let (date, b) = brandingCache[id], Date().timeIntervalSince(date) < ttl else { return nil }
         return b

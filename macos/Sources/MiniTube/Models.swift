@@ -104,6 +104,18 @@ struct DescriptionLink: Codable, Equatable, Hashable {
     let length: Int
 }
 
+/// Metadata for a description link's preview card (fetched only when a description is expanded).
+struct LinkPreview: Codable, Equatable, Hashable {
+    let url: String
+    let title: String?
+    let description: String?
+    let image: String?
+    let siteName: String?
+    /// Host shown on the card, so the user always sees where a link actually goes.
+    var host: String { URL(string: url)?.host?.replacingOccurrences(of: "www.", with: "") ?? url }
+    var hasContent: Bool { (title?.isEmpty == false) || (image?.isEmpty == false) }
+}
+
 struct WatchInfo: Codable, Equatable {
     let videoId: String
     let title: String

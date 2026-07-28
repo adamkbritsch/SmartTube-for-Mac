@@ -42,6 +42,7 @@ func routes(_ app: Application) throws {
     api.patch("settings", use: SettingsController.patch)
     api.get("ublock", use: SettingsController.ublock)
     api.get("adrules", use: SettingsController.adrules)
+    api.get("linkpreview", use: VideosController.linkPreview)   // description link cards (on expand)
     api.post("refresh", use: SettingsController.refresh)
     api.get("account", use: AuthController.account)
     api.get("health") { _ async in "ok" }
