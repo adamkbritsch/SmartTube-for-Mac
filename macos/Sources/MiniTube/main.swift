@@ -65,7 +65,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // so set the window appearance explicitly and keep it synced with the theme —
         // flipping the theme in the Firefox extension even restyles the traffic lights.
         window.appearance = NSAppearance(named: store.settings.theme == "light" ? .aqua : .darkAqua)
-        window.center()
+        // Open MAXIMIZED (zoomed), not fullscreen: fill the screen's visibleFrame, which excludes
+        // the menu bar and Dock. Fullscreen (.toggleFullScreen) would hide the menu bar and move
+        // the app to its own Space — the green button still does that if the user wants it.
+        if let screen = NSScreen.main {
+            window.setFrame(screen.visibleFrame, display: false)
+        } else {
+            window.center()
+        }
         window.contentView = NSHostingView(rootView: root)
         buildMainMenu()
         window.makeKeyAndOrderFront(nil)
