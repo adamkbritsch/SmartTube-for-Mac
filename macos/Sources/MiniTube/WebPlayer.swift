@@ -8,16 +8,42 @@ import AppKit
 /// forwarding every wheel event loses nothing. Fixes: hovering the video froze scrolling.
 final class ScrollThroughWebView: WKWebView {
     override func scrollWheel(with event: NSEvent) {
-        // Nearest NSScrollView ancestor — SwiftUI's ScrollView is backed by one
-        // (HostingScrollView, verified in the live superview chain).
-        var v: NSView? = superview
-        while let cur = v {
-            if let sv = cur as? NSScrollView { sv.scrollWheel(with: event); return }
-            v = cur.superview
+        if let sv = pageScrollView(atWindowPoint: event.locationInWindow) {
+            sv.scrollWheel(with: event)
+            return
         }
-        // No scroll view above us (e.g. reparented into WebKit's fullscreen window):
+        // Nothing to scroll behind us (e.g. reparented into WebKit's fullscreen window):
         // let the web content handle the wheel normally.
         super.scrollWheel(with: event)
+    }
+
+    /// The page's scroll view. Checks ANCESTORS first (the player used to live inside the scroll
+    /// view), then searches the window — because the mini-player rework moved the player into a
+    /// floating overlay that is a SIBLING of the scroll view, not a descendant, which silently
+    /// broke scroll-over-video again. Picks the largest scroll view under the pointer, i.e. the
+    /// page rather than a small nested one (the horizontal chips row).
+    func pageScrollView(atWindowPoint p: CGPoint) -> NSScrollView? {
+        var v: NSView? = superview
+        while let cur = v {
+            if let sv = cur as? NSScrollView { return sv }
+            v = cur.superview
+        }
+        guard let root = window?.contentView else { return nil }
+        var best: NSScrollView?
+        var bestArea: CGFloat = 0
+        func walk(_ view: NSView) {
+            if view === self { return }              // never our own subtree
+            if let sv = view as? NSScrollView {
+                let f = sv.convert(sv.bounds, to: nil)   // window coords
+                if f.contains(p) {
+                    let area = f.width * f.height
+                    if area > bestArea { bestArea = area; best = sv }
+                }
+            }
+            for sub in view.subviews { walk(sub) }
+        }
+        walk(root)
+        return best
     }
 }
 
