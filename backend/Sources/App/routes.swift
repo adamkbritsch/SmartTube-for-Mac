@@ -34,6 +34,7 @@ func routes(_ app: Application) throws {
     api.post("comments", "more", use: VideosController.moreComments)
     api.post("subscribe", use: VideosController.subscribe)
     api.post("like", use: VideosController.like)
+    api.post("feedback", use: VideosController.feedback)   // card 3-dot menu: not interested / undo
     api.post("markWatched", use: VideosController.markWatched)
     api.post("hdr", use: VideosController.hdr)
     api.get("channel", ":id", use: VideosController.channel)

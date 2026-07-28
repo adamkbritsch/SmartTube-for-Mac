@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import SwiftUI   // withAnimation for feed mutations (feedback removal / undo)
 
 /// Second-by-second playback readouts, isolated so only the views that show them
 /// (the enhance bar) re-render — not the whole tree hanging off Store.
@@ -692,6 +693,82 @@ final class Store: ObservableObject {
     func setSubscription(channelId: String, on: Bool) async -> Bool {
         struct Body: Encodable { let channelId: String; let subscribe: Bool }
         return await postAction("/api/subscribe", Body(channelId: channelId, subscribe: on))
+    }
+
+    // MARK: - Card overflow menu (YouTube feedback: not interested / don't recommend channel)
+
+    /// A just-applied feedback action, offered for undo. Also carries what to restore if the user
+    /// takes it back.
+    struct FeedbackUndo: Equatable {
+        let label: String          // what was done ("Not interested")
+        let title: String          // which video
+        let undoToken: String?
+        let video: VideoListItem
+        let index: Int
+    }
+    @Published var feedbackUndo: FeedbackUndo?
+    @Published var feedbackError: String?
+    private var undoDismissTask: Task<Void, Never>?
+
+    /// Apply one of YouTube's own menu actions to a feed card. The card disappears immediately
+    /// (optimistic), but if YouTube rejects the token it comes BACK and an error is surfaced —
+    /// never a silent phantom success.
+    func applyFeedback(_ video: VideoListItem, _ option: FeedbackOption) {
+        guard let idx = videos.firstIndex(where: { $0.id == video.id }) else { return }
+        let removed = videos[idx]
+        withAnimation(.easeInOut(duration: 0.2)) { videos.remove(at: idx) }
+        Task {
+            if await postFeedback(option.token) {
+                undoDismissTask?.cancel()
+                feedbackError = nil
+                feedbackUndo = FeedbackUndo(label: option.label, title: title(for: removed),
+                                            undoToken: option.undoToken, video: removed, index: idx)
+                undoDismissTask = Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 7_000_000_000)
+                    if !Task.isCancelled { withAnimation { feedbackUndo = nil } }
+                }
+            } else {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    videos.insert(removed, at: min(idx, videos.count))   // put it back
+                }
+                feedbackError = "Couldn't apply “\(option.label)”"
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 4_000_000_000)
+                    withAnimation { feedbackError = nil }
+                }
+            }
+        }
+    }
+
+    /// Take back the last feedback action and restore the card.
+    func undoFeedback() {
+        guard let u = feedbackUndo else { return }
+        undoDismissTask?.cancel()
+        withAnimation { feedbackUndo = nil }
+        guard let token = u.undoToken else {
+            // No undo token from YouTube — restore locally but say so rather than implying it
+            // was reversed upstream.
+            withAnimation { videos.insert(u.video, at: min(u.index, videos.count)) }
+            feedbackError = "Restored here, but YouTube didn't offer an undo"
+            return
+        }
+        Task {
+            if await postFeedback(token) {
+                withAnimation(.easeInOut(duration: 0.2)) { videos.insert(u.video, at: min(u.index, videos.count)) }
+            } else {
+                feedbackError = "Couldn't undo that"
+            }
+        }
+    }
+
+    func copyToPasteboard(_ string: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(string, forType: .string)
+    }
+
+    private func postFeedback(_ token: String) async -> Bool {
+        struct Body: Encodable { let token: String }
+        return await postAction("/api/feedback", Body(token: token))
     }
 
     /// Set the real like state: "like" | "dislike" | "none". Returns true on success.

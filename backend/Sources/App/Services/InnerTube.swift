@@ -71,6 +71,22 @@ enum InnerTube {
 
     // MARK: Personalized home feed (FEwhat_to_watch → video renderers)
 
+    /// One overflow-menu action YouTube itself offers for a feed item, carried verbatim from the
+    /// payload (label included) so the app never invents an action YouTube doesn't support here.
+    ///
+    /// `kind` is derived from the menu item's ICON, never its array position: the same index means
+    /// different things per feed — item 5 is "Not interested" on the home feed but "Remove from
+    /// watch history" on FEhistory. Position-keying would ship a "Don't suggest this" button that
+    /// silently deletes watch history. Feeds also differ in what they offer at all (home: Not
+    /// interested + Don't recommend channel; subscriptions: Hide; history: Remove from watch
+    /// history; search: none), so an empty list is normal, not an error.
+    struct FeedbackAction: Sendable {
+        let kind: String        // "notInterested" | "notChannel" | "removeFromHistory"
+        let label: String       // YouTube's own wording, verbatim
+        let token: String       // POST to /youtubei/v1/feedback
+        let undoToken: String?  // reverses it through the same endpoint
+    }
+
     struct FeedVideo: Sendable {
         let id: String
         let title: String
@@ -82,6 +98,7 @@ enum InnerTube {
         let published: String?
         let durationSeconds: Double?
         var previewUrl: String? = nil   // animated hover preview (an_webp), if YouTube provides one
+        var feedback: [FeedbackAction] = []   // overflow-menu actions; empty where YouTube offers none
     }
 
     /// The signed animated-preview URL (`i.ytimg.com/an_webp/…mqdefault_6s.webp`) YouTube ships
@@ -395,6 +412,45 @@ enum InnerTube {
         }
     }
 
+    /// Icon → our stable kind. An UNKNOWN icon is dropped, never guessed: firing an unrecognised
+    /// feedback token is how you'd silently wipe someone's watch history.
+    private static func feedbackKind(icon: String?) -> String? {
+        switch icon {
+        case "NOT_INTERESTED": return "notInterested"      // "Not interested" (home) / "Hide" (subs)
+        case "REMOVE":         return "notChannel"         // "Don't recommend channel"
+        case "DELETE":         return "removeFromHistory"  // "Remove from watch history"
+        default:               return nil
+        }
+    }
+
+    /// The overflow-menu feedback actions for a modern lockup, read from the menu sheet YouTube
+    /// ships inline with every feed item. Verified against a live signed-in home feed: every item
+    /// carried its tokens at exactly this path, and each endpoint's own `contentId` matched the
+    /// lockup — which we assert, so a shifted parse can't attach one video's token to another.
+    private static func feedbackActions(inLockup lvm: [String: Any], contentId: String) -> [FeedbackAction] {
+        guard let items = dig(lvm, "metadata", "lockupMetadataViewModel", "menuButton",
+                              "buttonViewModel", "onTap", "innertubeCommand", "showSheetCommand",
+                              "panelLoadingStrategy", "inlineContent", "sheetViewModel",
+                              "content", "listViewModel", "listItems") as? [[String: Any]] else { return [] }
+        var out: [FeedbackAction] = []
+        for item in items {
+            guard let liv = item["listItemViewModel"] as? [String: Any],
+                  let ep = dig(liv, "rendererContext", "commandContext", "onTap",
+                               "innertubeCommand", "feedbackEndpoint") as? [String: Any],
+                  let token = ep["feedbackToken"] as? String, !token.isEmpty
+            else { continue }
+            // Only accept a token that YouTube itself scoped to THIS video.
+            if let epID = ep["contentId"] as? String, epID != contentId { continue }
+            let icon = dig(liv, "leadingImage", "sources") as? [[String: Any]]
+            let iconName = (icon?.first?["clientResource"] as? [String: Any])?["imageName"] as? String
+            guard let kind = feedbackKind(icon: iconName) else { continue }
+            let label = (dig(liv, "title", "content") as? String) ?? kind
+            out.append(FeedbackAction(kind: kind, label: label, token: token,
+                                      undoToken: firstValue("undoToken", ep) as? String))
+        }
+        return out
+    }
+
     private static func addLockup(_ lvm: [String: Any], into acc: inout [String: FeedVideo], order: inout [String]) {
         guard let id = lvm["contentId"] as? String, acc[id] == nil else { return }
         if let ct = lvm["contentType"] as? String, !ct.contains("VIDEO") { return }   // skip playlists/channels
@@ -419,7 +475,8 @@ enum InnerTube {
             views: parts.first(where: { $0.lowercased().contains("view") }),
             published: parts.first(where: { $0.lowercased().contains("ago") }),
             durationSeconds: parseDuration(timeBadge(lvm)),
-            previewUrl: movingThumb(lvm)
+            previewUrl: movingThumb(lvm),
+            feedback: feedbackActions(inLockup: lvm, contentId: id)
         )
         order.append(id)
     }
@@ -653,6 +710,23 @@ enum InnerTube {
     // MARK: Write actions (modify the signed-in account)
 
     /// Subscribe to / unsubscribe from a channel. Requires the Firefox session.
+    /// Send one feedback token ("Not interested", "Don't recommend channel", an undo, …).
+    ///
+    /// Unlike the other write actions here, HTTP 200 is NOT treated as success: YouTube answers a
+    /// stale or rejected token with 200 and `isProcessed: false`, so the `call(...) != nil` idiom
+    /// used by setSubscription/setLike would report a silent phantom success. Parse the body.
+    static func sendFeedback(token: String, session: FirefoxSession.Session, client: Client) async -> Bool {
+        var body = context()
+        body["feedbackTokens"] = [token]
+        body["isFeedbackTokenUnencrypted"] = false
+        body["shouldMerge"] = false
+        guard let json = await call(path: "feedback", body: body, session: session, client: client) else { return false }
+        // Accept only an explicit processed:true from the response.
+        if let processed = firstValue("isProcessed", json) as? Bool { return processed }
+        if let ok = firstValue("success", json) as? Bool { return ok }
+        return false
+    }
+
     static func setSubscription(channelId: String, subscribe: Bool, session: FirefoxSession.Session, client: Client) async -> Bool {
         var body = context()
         body["channelIds"] = [channelId]

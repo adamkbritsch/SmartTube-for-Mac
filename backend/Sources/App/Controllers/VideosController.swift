@@ -18,6 +18,18 @@ struct VideoListItem: Content {
     var channelId: String? = nil       // real (feed/search/recs): tap the channel name to open it
     var channelAvatar: String? = nil   // real: the uploader's profile picture
     var previewUrl: String? = nil      // real: animated hover-preview (an_webp), when YouTube ships one
+    /// YouTube's OWN overflow-menu feedback actions for this item ("Not interested", "Don't
+    /// recommend channel", "Remove from watch history", …). Empty where YouTube offers none
+    /// (search results carry no feedback tokens) — that's normal, not a failure.
+    var feedback: [FeedbackOption] = []
+}
+
+/// A feedback action surfaced in the card's 3-dot menu, with the token needed to perform it.
+struct FeedbackOption: Content {
+    let kind: String        // "notInterested" | "notChannel" | "removeFromHistory"
+    let label: String       // YouTube's own wording
+    let token: String
+    let undoToken: String?
 }
 
 struct FeedPageResponse: Content {
@@ -371,8 +383,24 @@ enum VideosController {
             durationSeconds: fv.durationSeconds,
             viewCountText: fv.views, publishedText: fv.published,
             channelId: fv.channelId, channelAvatar: fv.channelAvatar,
-            previewUrl: fv.previewUrl
+            previewUrl: fv.previewUrl,
+            feedback: fv.feedback.map { FeedbackOption(kind: $0.kind, label: $0.label, token: $0.token, undoToken: $0.undoToken) }
         )
+    }
+
+    /// Perform one overflow-menu feedback action ("Not interested", "Don't recommend channel", or
+    /// an undo). The token comes straight from the feed payload, so the app can only ever send
+    /// something YouTube itself offered for that item.
+    static func feedback(_ req: Request) async throws -> ActionResult {
+        struct Body: Content { let token: String }
+        let token = try req.content.decode(Body.self).token
+        guard !token.isEmpty, token.count < 4096 else { throw Abort(.badRequest, reason: "bad token") }
+        guard let session = await req.auth.sessionIfConnected() else {
+            throw Abort(.unauthorized, reason: "not signed in")
+        }
+        let ok = await InnerTube.sendFeedback(token: token, session: session, client: req.client)
+        if ok { await req.state.clearFeedCache() }   // the feed changed server-side; don't serve a stale page
+        return ActionResult(ok: ok)
     }
 
     static func detail(_ req: Request) async throws -> VideoDetail {

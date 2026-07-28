@@ -85,6 +85,49 @@ struct VideoListItem: Codable, Identifiable, Hashable {
     let channelId: String?          // real: tap the channel name to open its page
     let channelAvatar: String?      // real: the uploader's profile picture
     var previewUrl: String? = nil   // real: animated hover preview (an_webp); absent on the home feed
+    /// YouTube's own overflow-menu actions for this card. Empty where YouTube offers none
+    /// (e.g. search results) — normal, not an error. Decode-tolerant via the init below.
+    var feedback: [FeedbackOption] = []
+}
+
+/// One action from a card's 3-dot menu, carrying the token that performs it.
+struct FeedbackOption: Codable, Hashable, Identifiable {
+    let kind: String        // "notInterested" | "notChannel" | "removeFromHistory"
+    let label: String       // YouTube's own wording
+    let token: String
+    let undoToken: String?
+    var id: String { kind + token.prefix(12) }
+
+    /// SF Symbol matching the action's meaning.
+    var symbol: String {
+        switch kind {
+        case "notChannel":        return "person.slash"
+        case "removeFromHistory": return "trash"
+        default:                  return "hand.thumbsdown"
+        }
+    }
+}
+
+extension VideoListItem {
+    // Decode-tolerant: a payload without `feedback` (older backend) must still decode.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        channel = (try? c.decode(String.self, forKey: .channel)) ?? ""
+        originalTitle = (try? c.decode(String.self, forKey: .originalTitle)) ?? ""
+        originalThumbnail = (try? c.decode(String.self, forKey: .originalThumbnail)) ?? ""
+        deArrowTitle = try? c.decode(String.self, forKey: .deArrowTitle)
+        deArrowThumbnail = try? c.decode(String.self, forKey: .deArrowThumbnail)
+        hasSponsorSegments = try? c.decode(Bool.self, forKey: .hasSponsorSegments)
+        hasDeArrow = try? c.decode(Bool.self, forKey: .hasDeArrow)
+        durationSeconds = try? c.decode(Double.self, forKey: .durationSeconds)
+        viewCountText = try? c.decode(String.self, forKey: .viewCountText)
+        publishedText = try? c.decode(String.self, forKey: .publishedText)
+        channelId = try? c.decode(String.self, forKey: .channelId)
+        channelAvatar = try? c.decode(String.self, forKey: .channelAvatar)
+        previewUrl = try? c.decode(String.self, forKey: .previewUrl)
+        feedback = (try? c.decode([FeedbackOption].self, forKey: .feedback)) ?? []
+    }
 }
 
 struct FeedPageResponse: Codable {

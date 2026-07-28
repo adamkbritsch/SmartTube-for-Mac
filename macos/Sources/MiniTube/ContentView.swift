@@ -1234,6 +1234,36 @@ private struct FeedView: View {
             }
         }
         .background(themeBackground(store.settings.theme))
+        // Feedback result: undo affordance on success, a visible error when YouTube rejected it
+        // (the card is put back in that case — it must never look like it worked).
+        .overlay(alignment: .bottom) {
+            if let u = store.feedbackUndo {
+                HStack(spacing: 14) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(u.label).font(.system(size: 13, weight: .semibold))
+                        Text(u.title).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                    Button("Undo") { store.undoFeedback() }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Color(red: 0.24, green: 0.65, blue: 1))
+                        .clickable()
+                }
+                .padding(.horizontal, 16).padding(.vertical, 11)
+                .background(RoundedRectangle(cornerRadius: 10).fill(Color.primary.opacity(0.12)))
+                .background(RoundedRectangle(cornerRadius: 10).fill(themeBackground(store.settings.theme)))
+                .padding(.bottom, 24)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            } else if let err = store.feedbackError {
+                Label(err, systemImage: "exclamationmark.triangle.fill")
+                    .font(.system(size: 13)).foregroundStyle(.orange)
+                    .padding(.horizontal, 16).padding(.vertical, 11)
+                    .background(RoundedRectangle(cornerRadius: 10).fill(Color.primary.opacity(0.12)))
+                    .background(RoundedRectangle(cornerRadius: 10).fill(themeBackground(store.settings.theme)))
+                    .padding(.bottom, 24)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
         // Probe for HDR when the HDR chip is picked, and again as the feed grows.
         .onChange(of: selectedChip) { _, v in if v == "HDR" { Task { await store.loadHDR() } } }
         .onChange(of: store.videos.count) { _, _ in
@@ -1598,11 +1628,71 @@ private struct AdCard: View {
 
 // MARK: - Video card
 
+/// The card's 3-dot menu. The feedback rows are built from YouTube's OWN menu for that item
+/// (labels and tokens come straight from the feed payload), so the app never offers an action
+/// YouTube doesn't actually support for that card — and the wording always matches YouTube's.
+/// Feeds differ: home offers "Not interested" + "Don't recommend channel", subscriptions offer
+/// "Hide", history offers "Remove from watch history", and search offers none at all.
+private struct VideoCardMenu: View {
+    @EnvironmentObject var store: Store
+    let video: VideoListItem
+    let dismiss: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(video.feedback) { option in
+                row(option.label, option.symbol) {
+                    store.applyFeedback(video, option)
+                }
+            }
+            if !video.feedback.isEmpty { Divider().opacity(0.25) }
+            row("Copy link", "link") {
+                store.copyToPasteboard("https://www.youtube.com/watch?v=\(video.id)")
+            }
+            if let cid = video.channelId, !cid.isEmpty {
+                row("Go to channel", "person.crop.circle") { store.openChannel(cid) }
+            }
+            row("Open in YouTube", "arrow.up.forward.square") {
+                store.openURL("https://www.youtube.com/watch?v=\(video.id)")
+            }
+        }
+        .padding(6)
+        .frame(width: 246)
+    }
+
+    private func row(_ title: String, _ symbol: String, _ action: @escaping () -> Void) -> some View {
+        Button {
+            action()
+            dismiss()
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: symbol).font(.system(size: 12)).frame(width: 16)
+                Text(title).font(.system(size: 13)).lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 8).padding(.vertical, 7)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(HoverRowStyle()).clickable()
+    }
+}
+
+/// Subtle hover fill for menu rows, matching the app's elevation ladder.
+private struct HoverRowStyle: ButtonStyle {
+    @State private var hover = false
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(hover ? 0.10 : 0)))
+            .onHover { hover = $0 }
+    }
+}
+
 private struct VideoCard: View {
     @EnvironmentObject var store: Store
     let video: VideoListItem
     @State private var hover = false
     @State private var channelHover = false
+    @State private var showMenu = false
     // Hover-to-preview state.
     @State private var previewOn = false
     @State private var clip: PreviewClip? = nil
@@ -1621,8 +1711,23 @@ private struct VideoCard: View {
                     Text(metaLine).font(.system(size: 12)).foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 0)
-                if hover {
-                    Image(systemName: "ellipsis").font(.system(size: 14)).foregroundStyle(.secondary)
+                // 3-dot overflow menu. Button + popover rather than SwiftUI `Menu`: an image-labelled
+                // Menu gets rendered through AppKit menu chrome that mangles the label (same trap
+                // that broke the account avatar).
+                if hover || showMenu {
+                    Button { showMenu.toggle() } label: {
+                        Image(systemName: "ellipsis")
+                            .font(.system(size: 14))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 24, height: 24)
+                            .background(Circle().fill(Color.primary.opacity(showMenu ? 0.12 : 0)))
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain).clickable()
+                    .popover(isPresented: $showMenu, arrowEdge: .bottom) {
+                        VideoCardMenu(video: video, dismiss: { showMenu = false })
+                            .environmentObject(store)
+                    }
                 }
             }
         }
