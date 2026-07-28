@@ -217,39 +217,50 @@ struct WatchPage: View {
         // make SwiftUI tear down and rebuild the WKWebView and RELOAD the video mid-playback.
         GeometryReader { outer in
             ZStack(alignment: .topLeading) {
-                scrollBody
-                floatingPlayer(in: outer.size)
+                scrollBody(outer.size)
+                floatingPlayer(in: outer.size, origin: outer.frame(in: .global).origin)
             }
-            .coordinateSpace(name: Self.watchSpace)
             .clipped()
-            .onPreferenceChange(PlayerSlotFrameKey.self) { slotFrame = $0 }
-            .onChange(of: videoId) { _, _ in miniDrag = .zero }   // new video → re-center the mini
+            .onChange(of: videoId) { _, _ in miniDrag = .zero; dragStart = .zero }
         }
     }
 
-    /// The mini player's size and where it parks when it isn't docked.
-    private static let miniWidth: CGFloat = 360
-    private static let watchSpace = "watchArea"
-    private var miniSize: CGSize { CGSize(width: Self.miniWidth, height: (Self.miniWidth * 9 / 16).rounded()) }
+    private static let minScale: CGFloat = 1.0 / 3.0    // shrinks to a third, then stays
+    private static let pinY: CGFloat = 12               // where it parks while shrunk
 
-    /// Docked while the player's reserved slot is still meaningfully on screen; mini once it has
-    /// scrolled away (i.e. you're reading the description/comments).
-    private var isMini: Bool { slotFrame.width > 1 && slotFrame.maxY < 96 }
+    /// The player's full (docked) width for a given container — also used for the placeholder's
+    /// height, because a flexible `Color.clear` + aspectRatio collapses to zero inside a ScrollView.
+    private func fullPlayerWidth(_ container: CGSize) -> CGFloat {
+        let railW: CGFloat = store.settings.theaterMode ? 0 : 426   // rail 402 + 24 spacing
+        return max(240, container.width - railW - 40)               // minus the column's 20pt padding
+    }
 
-    @ViewBuilder private func floatingPlayer(in container: CGSize) -> some View {
-        // Fallback for the first frame, before the placeholder has reported its geometry — never
-        // hand the WKWebView a 0x0 frame.
-        let railW: CGFloat = store.settings.theaterMode ? 0 : 426
-        let fallbackW = max(320, container.width - railW - 40)
-        let docked = !isMini
-        let hasSlot = slotFrame.width > 1
+    /// How far the player has shrunk: 0 = fully docked, 1 = parked at `minScale`. Driven directly by
+    /// scroll position, so the video scales smoothly as you scroll rather than snapping.
+    private func shrinkProgress(_ container: CGSize, localSlotY: CGFloat) -> CGFloat {
+        guard slotFrame.width > 1 else { return 0 }
+        let fullH = fullPlayerWidth(container) * 9 / 16
+        let travel = max(1, fullH * 0.8)                 // fully shrunk after ~80% of it scrolls by
+        let past = max(0, Self.pinY - localSlotY)        // how far the slot went above the pin line
+        return min(1, past / travel)
+    }
 
-        let w = docked ? (hasSlot ? slotFrame.width : fallbackW) : miniSize.width
-        let h = docked ? (hasSlot ? slotFrame.height : fallbackW * 9 / 16) : miniSize.height
-        let miniX = min(max(16 + miniDrag.width, 8), max(8, container.width - miniSize.width - 8))
-        let miniY = min(max(16 + miniDrag.height, 8), max(8, container.height - miniSize.height - 8))
-        let x = docked ? (hasSlot ? slotFrame.minX : 20) : miniX
-        let y = docked ? (hasSlot ? slotFrame.minY : 20) : miniY
+    @ViewBuilder private func floatingPlayer(in container: CGSize, origin: CGPoint) -> some View {
+        // Slot position relative to this container (both measured globally).
+        let localSlotX = slotFrame.minX - origin.x
+        let localSlotY = slotFrame.minY - origin.y
+        let t = shrinkProgress(container, localSlotY: localSlotY)
+        let shrunk = t > 0.01
+        let fullW = slotFrame.width > 1 ? slotFrame.width : fullPlayerWidth(container)
+        let scale = 1 - t * (1 - Self.minScale)
+        let w = fullW * scale
+        let h = w * 9 / 16
+        // Docked it tracks the slot exactly; once it reaches the pin line it stays there and
+        // shrinks in place, plus wherever the user has dragged it.
+        let baseX = slotFrame.width > 1 ? localSlotX : 20
+        let baseY = max(Self.pinY, slotFrame.width > 1 ? localSlotY : 20)
+        let x = min(max(baseX + (shrunk ? miniDrag.width : 0), 8), max(8, container.width - w - 8))
+        let y = min(max(baseY + (shrunk ? miniDrag.height : 0), 8), max(8, container.height - h - 8))
 
         playerSlot
             .frame(width: max(1, w), height: max(1, h))
@@ -259,30 +270,21 @@ struct WatchPage: View {
             .background(
                 RoundedRectangle(cornerRadius: 12)
                     .fill(Color.black)
-                    .shadow(color: .black.opacity(isMini ? 0.5 : 0), radius: isMini ? 18 : 0, y: isMini ? 8 : 0)
+                    .shadow(color: .black.opacity(0.5 * t), radius: 18 * t, y: 8 * t)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 12)
-                    .strokeBorder(Color.white.opacity(isMini ? 0.14 : 0), lineWidth: 1)
+                    .strokeBorder(Color.white.opacity(0.14 * t), lineWidth: 1)
             )
             .offset(x: x, y: y)
-            .animation(.easeInOut(duration: 0.22), value: isMini)
             .gesture(
                 DragGesture(minimumDistance: 2)
                     .onChanged { g in
-                        guard isMini else { return }   // only draggable as a mini player
+                        guard shrunk else { return }   // draggable only once it's shrunk
                         miniDrag = CGSize(width: dragStart.width + g.translation.width,
                                           height: dragStart.height + g.translation.height)
                     }
-                    .onEnded { _ in
-                        guard isMini else { return }
-                        // Persist the clamped position so the next drag starts where it sits.
-                        miniDrag = CGSize(width: min(max(16 + miniDrag.width, 8),
-                                                     max(8, container.width - miniSize.width - 8)) - 16,
-                                          height: min(max(16 + miniDrag.height, 8),
-                                                      max(8, container.height - miniSize.height - 8)) - 16)
-                        dragStart = miniDrag
-                    }
+                    .onEnded { _ in if shrunk { dragStart = miniDrag } }
             )
     }
 
@@ -290,18 +292,29 @@ struct WatchPage: View {
     // player/description/comments (was two independent ScrollViews). A vertical ScrollView
     // fixes the cross-axis width, so the main column takes the remaining space and the rail
     // stays a fixed 402pt beside it.
-    private var scrollBody: some View {
+    private func scrollBody(_ container: CGSize) -> some View {
         ScrollView {
             HStack(alignment: .top, spacing: 24) {
                 VStack(alignment: .leading, spacing: 12) {
                     // Reserves the player's space in the layout and reports where it is; the real
-                    // player is drawn over it by floatingPlayer.
+                    // player is drawn over it by floatingPlayer. The height is set EXPLICITLY —
+                    // a flexible Color.clear with .aspectRatio collapses to 0x0 inside a ScrollView
+                    // (unbounded height proposal), which silently disabled the whole mini player.
                     Color.clear
-                        .aspectRatio(16.0 / 9.0, contentMode: .fit)
                         .frame(maxWidth: .infinity)
+                        .frame(height: (fullPlayerWidth(container) * 9 / 16).rounded())
+                        // Report the slot's live position straight into state. (A PreferenceKey was
+                        // tried first and never propagated out of the ScrollView — the reader was
+                        // laid out correctly but the ancestor only ever saw the default value.)
                         .background(GeometryReader { g in
-                            Color.clear.preference(key: PlayerSlotFrameKey.self,
-                                                   value: g.frame(in: .named(Self.watchSpace)))
+                            Color.clear
+                                .onAppear { slotFrame = g.frame(in: .global) }
+                                .onChange(of: g.frame(in: .global)) { _, f in
+                                    // Fires on every scroll frame — ignore sub-pixel noise so we
+                                    // don't re-render the watch page more often than we must.
+                                    if abs(f.minY - slotFrame.minY) >= 0.5
+                                        || abs(f.width - slotFrame.width) >= 0.5 { slotFrame = f }
+                                }
                         })
                     playerBar
 
@@ -352,12 +365,6 @@ struct WatchPage: View {
         .onChange(of: store.watchInfo?.videoId) { _, _ in seedEngagement() }
     }
 
-    /// Where the player's reserved slot currently sits (in the watch area's coordinate space).
-    /// Drives the docked ↔ mini transition as the page scrolls.
-    private struct PlayerSlotFrameKey: PreferenceKey {
-        static let defaultValue: CGRect = .zero
-        static func reduce(value: inout CGRect, nextValue: () -> CGRect) { value = nextValue() }
-    }
 
     /// Reflect the real subscribed / like state once this video's metadata arrives.
     /// Seeds at most once per video, and never over a user tap that's still in
