@@ -50,6 +50,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             backing: .buffered,
             defer: false
         )
+        // Belt-and-braces: keep the window object alive across a close so no code path can ever
+        // message a freed window (see applicationShouldTerminateAfterLastWindowClosed).
+        window.isReleasedWhenClosed = false
         window.title = "SmartTube"
         // Native unified/transparent titlebar so the dark app reads as one seamless surface.
         window.titleVisibility = .hidden
@@ -64,6 +67,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.appearance = NSAppearance(named: store.settings.theme == "light" ? .aqua : .darkAqua)
         window.center()
         window.contentView = NSHostingView(rootView: root)
+        buildMainMenu()
         window.makeKeyAndOrderFront(nil)
 
         store.$settings
@@ -80,15 +84,65 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        PlayerSession.shared.stopKeepalive()
         backend.stop()   // tear down the backend we spawned
     }
 
-    // Keep running if the window is closed by accident; reopen it from the Dock.
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+    /// Closing the window QUITS. Previously this returned false ("keep running, reopen from the
+    /// Dock"), which was actively broken: an NSWindow built with the designated initializer has
+    /// isReleasedWhenClosed == true, so AppKit freed the window on close while the app lived on
+    /// holding a dangling reference — and the Dock-icon reopen then messaged that freed window
+    /// (EXC_BAD_ACCESS in applicationShouldHandleReopen; four crash reports on disk). It also left
+    /// the Dock's running-dot lit after the user thought they'd closed the app, and because the
+    /// crash was a SIGSEGV, applicationWillTerminate never ran, orphaning the spawned backend.
+    /// Quitting on close makes the Dock dot honest AND runs the clean teardown above.
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
-    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        if !flag { window.makeKeyAndOrderFront(nil) }
-        return true
+    // NOTE: no applicationShouldHandleReopen — with quit-on-close there is no windowless-but-running
+    // state to reopen into, and AppKit's default already unhides/deminiaturizes correctly.
+
+    func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool { true }
+
+    /// The app shipped with NO menu bar at all, so there was no ⌘Q, ⌘W, or even ⌘C — despite the
+    /// title/description being selectable text and the header having a search field. Install the
+    /// standard responder-driven menus.
+    private func buildMainMenu() {
+        let name = "SmartTube"
+        let main = NSMenu()
+
+        let appItem = NSMenuItem()
+        let appMenu = NSMenu()
+        appMenu.addItem(withTitle: "About \(name)", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: "Hide \(name)", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+        let hideOthers = NSMenuItem(title: "Hide Others", action: #selector(NSApplication.hideOtherApplications(_:)), keyEquivalent: "h")
+        hideOthers.keyEquivalentModifierMask = [.command, .option]
+        appMenu.addItem(hideOthers)
+        appMenu.addItem(withTitle: "Show All", action: #selector(NSApplication.unhideAllApplications(_:)), keyEquivalent: "")
+        appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: "Quit \(name)", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        appItem.submenu = appMenu
+        main.addItem(appItem)
+
+        let fileItem = NSMenuItem()
+        let fileMenu = NSMenu(title: "File")
+        fileMenu.addItem(withTitle: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        fileItem.submenu = fileMenu
+        main.addItem(fileItem)
+
+        let editItem = NSMenuItem()
+        let editMenu = NSMenu(title: "Edit")
+        editMenu.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+        editMenu.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "Z")
+        editMenu.addItem(.separator())
+        editMenu.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        editItem.submenu = editMenu
+        main.addItem(editItem)
+
+        NSApp.mainMenu = main
     }
 }
 
