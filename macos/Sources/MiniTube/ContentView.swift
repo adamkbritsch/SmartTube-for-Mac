@@ -1160,6 +1160,8 @@ private struct FeedView: View {
             .prefix(6).map(\.key)
     }
 
+    private static let topAnchor = "feedTop"
+
     private var isSearch: Bool { !store.searchQuery.isEmpty }
 
     private var shown: [VideoListItem] {
@@ -1200,7 +1202,10 @@ private struct FeedView: View {
             }
             Divider().opacity(0.3)
 
+            ScrollViewReader { proxy in
             ScrollView {
+                // Zero-height anchor so navigating to a new destination can jump back to the top.
+                Color.clear.frame(height: 0).id(Self.topAnchor)
                 if store.homeLoading && !isSearch && store.feedHeading == nil {
                     // Initial launch: skeleton grid until the personalized
                     // recommendations arrive (no seeded-catalog flash).
@@ -1279,6 +1284,11 @@ private struct FeedView: View {
                 .padding(20)
                 }   // end else (not homeLoading)
             }
+            // Any feed navigation (logo → Home, Subscriptions, History, …) starts at the top.
+            .onChange(of: store.feedTopToken) { _, _ in
+                proxy.scrollTo(Self.topAnchor, anchor: .top)
+            }
+            }   // end ScrollViewReader
         }
         .background(themeBackground(store.settings.theme))
         // Feedback result: undo affordance on success, a visible error when YouTube rejected it

@@ -274,7 +274,13 @@ final class Store: ObservableObject {
     }
 
     /// Reset every "which page is showing" flag before opening a new destination.
+    /// Bumped whenever we navigate to a new feed destination, so the grid jumps back to the top.
+    /// Without this, clicking the logo from a scrolled home feed reloaded the videos but left you
+    /// parked mid-feed (SwiftUI keeps the scroll offset across a content swap).
+    @Published var feedTopToken = 0
+
     private func clearNav() {
+        feedTopToken &+= 1
         watchVideoId = nil; watchInfo = nil; fullscreen = false; searchQuery = ""
         channelId = nil; channelInfo = nil; playlists = nil; shortsFeed = nil; feedMode = "home"
     }
