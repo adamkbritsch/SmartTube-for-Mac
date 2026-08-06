@@ -163,6 +163,10 @@ struct WatchPage: View {
     @State private var seededVideoId = ""     // metadata state applied once per video
     @State private var likeWritesInFlight = 0
     @State private var seededLikeState = 0     // like state the server's count already reflects
+    // "Send to Visionary" (4K Dolby Vision upscale) — button only exists while its engine answers.
+    @ObservedObject private var visionary = VisionaryBridge.shared
+    @State private var visionarySending = false
+    @State private var visionaryResult: VisionaryBridge.SendResult?
     @State private var subscribeWritesInFlight = 0
 
     private var info: WatchInfo? { store.watchInfo?.videoId == videoId ? store.watchInfo : nil }
@@ -372,8 +376,10 @@ struct WatchPage: View {
         .animation(.easeInOut(duration: 0.2), value: store.settings.theaterMode)
         .onChange(of: videoId) { _, _ in
             subscribed = false; likeState = 0; shareCopied = false; selectedChip = "All"; descExpanded = false
+            visionaryResult = nil; visionarySending = false
+            visionary.refreshAvailability()   // cached ~60s; never blocks
         }
-        .onAppear { seedEngagement() }
+        .onAppear { seedEngagement(); visionary.refreshAvailability() }
         .onChange(of: store.watchInfo?.videoId) { _, _ in seedEngagement() }
     }
 
@@ -525,6 +531,55 @@ struct WatchPage: View {
                     .padding(.horizontal, 14).frame(height: 36)
                     .background(Capsule().fill(Color.primary.opacity(0.1)))
             }.buttonStyle(.plain).clickable()
+
+            // Only shown while Visionary's local engine actually answers — no disabled ghost when
+            // the app isn't running.
+            if visionary.available {
+                Button { sendToVisionary() } label: {
+                    Label(visionarySendLabel, systemImage: visionarySendSymbol)
+                        .font(.system(size: 13, weight: .medium))
+                        .padding(.horizontal, 14).frame(height: 36)
+                        .foregroundStyle(visionaryResult?.isError == true ? AnyShapeStyle(Color.orange)
+                                                                          : AnyShapeStyle(Color.primary))
+                        .background(Capsule().fill(Color.primary.opacity(0.1)))
+                }
+                .buttonStyle(.plain).clickable()
+                .disabled(visionarySending)
+                .help("Upscale this video to 4K Dolby Vision with Visionary")
+                .animation(.easeOut(duration: 0.15), value: visionaryResult)
+            }
+        }
+    }
+
+    private var visionarySendLabel: String {
+        if visionarySending { return "Sending…" }
+        return visionaryResult?.label ?? "Send to Visionary"
+    }
+    private var visionarySendSymbol: String {
+        if visionarySending { return "arrow.up.square" }
+        return visionaryResult?.symbol ?? "arrow.up.square"
+    }
+
+    /// Hand this video to Visionary's upscale pipeline. Fire-and-forget: Visionary fetches it via
+    /// its downloader and upscales it next in its queue, which takes a long time — so this reports
+    /// a one-shot result on the button and never tries to track progress.
+    private func sendToVisionary() {
+        guard !visionarySending else { return }
+        visionarySending = true
+        visionaryResult = nil
+        let id = videoId
+        let name = info?.title ?? store.watchInfo?.title ?? ""
+        Task {
+            let result = await visionary.send(videoId: id, title: name)
+            await MainActor.run {
+                visionarySending = false
+                guard store.watchVideoId == id else { return }   // user navigated away
+                visionaryResult = result
+            }
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            await MainActor.run {
+                withAnimation(.easeOut(duration: 0.2)) { visionaryResult = nil }
+            }
         }
     }
 
