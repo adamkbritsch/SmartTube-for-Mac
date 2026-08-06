@@ -46,8 +46,25 @@ final class VisionaryBridge: ObservableObject {
         }
     }
 
+    /// Visionary's own state shape. Decoding this is what proves the thing answering on :8765 is
+    /// actually Visionary and not some other local server that happens to hold the port — and
+    /// since the endpoint is loopback, that also proves it's installed on THIS Mac. Deliberately
+    /// not a filesystem/bundle check: the engine can run without its GUI app being frontmost, so
+    /// probing for a running application would hide the button in a perfectly working setup.
+    private struct EngineState: Decodable {
+        struct YouTube: Decodable { let connected: Bool }
+        let youtube: YouTube          // the YouTube pipeline (its downloader link)
+        let automation_enabled: Bool  // present on every Visionary state; part of the identity check
+        let status: String
+    }
+
     /// Refresh availability at most once per TTL. Never blocks the caller or the UI: the probe runs
     /// detached with a short timeout, and `available` simply flips when it answers.
+    ///
+    /// Availability requires BOTH that this is really Visionary's engine AND that it can actually
+    /// take a video right now: `youtube.connected` is the downloader link, and it's exactly the
+    /// condition behind the `youtarr-unreachable` reply. Gating on it means the button is only ever
+    /// offered when clicking it can genuinely succeed, instead of failing on contact.
     func refreshAvailability(force: Bool = false) {
         guard force || Date().timeIntervalSince(checkedAt) > ttl else { return }
         guard probe == nil else { return }
@@ -56,18 +73,22 @@ final class VisionaryBridge: ObservableObject {
             var req = URLRequest(url: stateURL)
             req.timeoutInterval = 2
             req.httpMethod = "GET"
-            let up: Bool
-            if let (_, resp) = try? await URLSession.shared.data(for: req),
+            var up = false
+            var why = "not running"
+            if let (data, resp) = try? await URLSession.shared.data(for: req),
                let http = resp as? HTTPURLResponse, http.statusCode == 200 {
-                up = true
-            } else {
-                up = false
+                if let state = try? JSONDecoder().decode(EngineState.self, from: data) {
+                    up = state.youtube.connected
+                    why = up ? "ready" : "downloader offline — can't accept videos"
+                } else {
+                    why = "something else is on :8765 (not Visionary)"
+                }
             }
             self.checkedAt = Date()
             self.probe = nil
             if self.available != up {
                 self.available = up
-                print("[Visionary] engine \(up ? "available" : "not running")")
+                print("[Visionary] \(up ? "available" : "hidden") — \(why)")
             }
         }
     }
