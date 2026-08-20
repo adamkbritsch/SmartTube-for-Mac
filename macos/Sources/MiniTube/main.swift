@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 import Combine
 import Darwin
+import WebKit
 
 // Bootstrap a normal windowed app from a plain SwiftPM executable — no Xcode /
 // app bundle required. AppKit sets up the app, then hosts a SwiftUI view tree.
@@ -12,6 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var store: Store!
     private let backend = BackendManager()
     private var cancellables = Set<AnyCancellable>()
+    private var keyMonitor: Any?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setvbuf(stdout, nil, _IONBF, 0)   // unbuffered stdout so diagnostics flush immediately
@@ -53,6 +55,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Belt-and-braces: keep the window object alive across a close so no code path can ever
         // message a freed window (see applicationShouldTerminateAfterLastWindowClosed).
         window.isReleasedWhenClosed = false
+        // Needed so the focus ring can hide again the moment the mouse is used:
+        // without this the window never delivers .mouseMoved and the monitor below
+        // would only ever see key events.
+        window.acceptsMouseMovedEvents = true
         window.title = "SmartTube"
         // Native unified/transparent titlebar so the dark app reads as one seamless surface.
         window.titleVisibility = .hidden
@@ -75,6 +81,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         window.contentView = NSHostingView(rootView: root)
         buildMainMenu()
+        installKeyMonitor()
         window.makeKeyAndOrderFront(nil)
 
         store.$settings
@@ -109,6 +116,63 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // state to reopen into, and AppKit's default already unhides/deminiaturizes correctly.
 
     func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool { true }
+
+    /// Arrow-key / Enter navigation, Plex-HTPC style.
+    ///
+    /// An NSApp-level LOCAL monitor rather than SwiftUI `.onKeyPress`: onKeyPress only fires on a
+    /// focused view, and the watch page's WKWebView takes first responder the moment it is clicked,
+    /// so SwiftUI would never see the arrows. A local monitor runs inside `sendEvent` — ahead of
+    /// menu key-equivalents and every responder — so it can consume or forward deliberately. It is
+    /// app-level, not window-level, because WebKit reparents the player into its own
+    /// WebCoreFullScreenWindow for YouTube fullscreen.
+    private func installKeyMonitor() {
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .mouseMoved]) { event in
+            MainActor.assumeIsolated {
+                let engine = FocusEngine.shared
+
+                if event.type == .mouseMoved {
+                    engine.mouseTookOver()      // mouse wins: put the ring away
+                    return event
+                }
+
+                // Never touch a key that belongs to someone else:
+                //  • any modifier combo (⌘F, ⌘Q, ⌘C … all keep working)
+                //  • text entry — SwiftUI's TextField editor is an NSTextView, so checking for
+                //    NSTextField would silently miss it and eat caret movement
+                //  • any web content (the player's own ←/→ seek, and typing an email/password in
+                //    the sign-in WKWebView)
+                let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+                if !mods.isDisjoint(with: [.command, .option, .control]) { return event }
+                let responder = NSApp.keyWindow?.firstResponder
+                if responder is NSTextView { return event }
+                if let r = responder as? NSView, Self.isWebContent(r) { return event }
+
+                switch event.keyCode {
+                case 126: return engine.handle(direction: .up) ? nil : event
+                case 125: return engine.handle(direction: .down) ? nil : event
+                case 123: return engine.handle(direction: .left) ? nil : event
+                case 124: return engine.handle(direction: .right) ? nil : event
+                case 36, 76: return engine.handleActivate() ? nil : event      // Return / keypad Enter
+                case 53, 51: return engine.handleEscape() ? nil : event        // Escape / Delete(⌫) = Back
+                                                                               // (⌫ is the TV-remote
+                                                                               // back button; the text
+                                                                               // guards above keep it
+                                                                               // deleting while typing)
+                default: return event
+                }
+            }
+        }
+    }
+
+    /// True when this view (or an ancestor) is a web view — i.e. the keystroke belongs to the page.
+    private static func isWebContent(_ view: NSView) -> Bool {
+        var v: NSView? = view
+        while let cur = v {
+            if cur is WKWebView { return true }
+            v = cur.superview
+        }
+        return false
+    }
 
     /// The app shipped with NO menu bar at all, so there was no ⌘Q, ⌘W, or even ⌘C — despite the
     /// title/description being selectable text and the header having a search field. Install the

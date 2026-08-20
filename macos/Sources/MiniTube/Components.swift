@@ -90,14 +90,17 @@ enum Grid3 {
     /// Video / playlist columns: 3 only at maximized/fullscreen widths, fewer as the
     /// window narrows — capped at 3 (never squished into 4+). Breakpoints on the
     /// content-area width; one-line tunable.
-    static func videoColumns(for width: CGFloat) -> [GridItem] {
-        let count: Int
+    /// Column count for a given width — the single source of truth shared by the layout below and
+    /// the keyboard-focus arithmetic, so Up/Down can never disagree with what's on screen.
+    static func columnCount(for width: CGFloat) -> Int {
         switch width {
-        case 1040...: count = 3
-        case 600...:  count = 2
-        default:      count = 1
+        case 1040...: return 3
+        case 600...:  return 2
+        default:      return 1
         }
-        return Array(repeating: GridItem(.flexible(), spacing: 16), count: count)
+    }
+    static func videoColumns(for width: CGFloat) -> [GridItem] {
+        Array(repeating: GridItem(.flexible(), spacing: 16), count: columnCount(for: width))
     }
     /// Shorts columns: up to 5, scaling down with width (min 2).
     static func shortsColumns(for width: CGFloat) -> [GridItem] {

@@ -95,6 +95,27 @@ struct ContentView: View {
         .preferredColorScheme(store.settings.theme == "dark" ? .dark : .light)
         .frame(minWidth: 940, minHeight: 580)
         .onAppear {
+            // Keyboard navigation: what Enter and Escape do at the top level. Kept here (rather
+            // than as per-row closures) so nothing long-lived captures a transient SwiftUI view.
+            let engine = FocusEngine.shared
+            engine.activate = { target in
+                switch target.zone {
+                case .grid:
+                    if let id = engine.id(target) { store.openWatch(id) }
+                default: break
+                }
+            }
+            engine.escape = {
+                if store.watchVideoId != nil || store.canGoBack { store.goBack() }
+            }
+            engine.suspended = store.watchVideoId != nil
+        }
+        // On the watch page the arrows belong to the player (YouTube's own ←/→ seek), so the
+        // engine stands down rather than moving focus around the feed hidden behind the overlay.
+        .onChange(of: store.watchVideoId) { _, id in
+            FocusEngine.shared.suspended = id != nil
+        }
+        .onAppear {
             // Debug hook: write a video id to /tmp/mt-open-watch to auto-open it, so
             // the ad-prune path can be exercised headlessly.
             if let id = try? String(contentsOfFile: "/tmp/mt-open-watch", encoding: .utf8)
@@ -1056,7 +1077,11 @@ private struct SidebarView: View {
     private let subsCollapsedLimit = 7
 
     var body: some View {
-        if collapsed { miniRail } else { fullSidebar }
+        (collapsed ? AnyView(miniRail) : AnyView(fullSidebar))
+            // Publish the focusable rows so the engine can navigate into and through the sidebar.
+            // Without this, Left from the feed's first column had nowhere to go and did nothing.
+            .onAppear { FocusEngine.shared.setItems(.sidebar, focusItems) }
+            .onChange(of: focusItems) { _, items in FocusEngine.shared.setItems(.sidebar, items) }
     }
 
     private var miniRail: some View {
@@ -1088,6 +1113,7 @@ private struct SidebarView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain).clickable()
+        .modifier(OptionalFocus(target: focusTarget(label), shape: .rect(10)) { activateRow(label) })
         .padding(.horizontal, 6)
     }
 
@@ -1136,22 +1162,52 @@ private struct SidebarView: View {
             .contentShape(RoundedRectangle(cornerRadius: 10))
         }
         .buttonStyle(.plain).clickable()
+        .modifier(OptionalFocus(target: focusTarget("__more"), shape: .rect(10)) { withAnimation(.easeInOut(duration: 0.18)) { subsExpanded.toggle() } })
+    }
+
+    /// One implementation of a sidebar row's behaviour, shared by the click and by Enter.
+    private func activateRow(_ label: String) {
+        selected = label
+        switch label {
+        case "Home": store.goHome()
+        case "Shorts": store.openShorts()
+        case "Subscriptions": store.openSubscriptions()
+        case "History": store.openHistory()
+        case "Playlists": store.openPlaylists()
+        case "Watch later": store.openWatchLater()
+        case "Liked videos": store.openLiked()
+        case "Your channel", "Your videos": store.openMyChannel()
+        default: break
+        }
+    }
+
+    /// The sidebar rows that can hold keyboard focus, in visual order. Section headers are skipped
+    /// (they aren't interactive), and the list tracks the conditional rows so the indices the
+    /// engine navigates always line up with what's drawn.
+    var focusItems: [String] {
+        if collapsed { return ["Home", "Shorts", "Subscriptions", "You"] }
+        var out = ["Home", "Shorts", "Subscriptions"]
+        if store.account.signedIn && !store.account.subscriptions.isEmpty {
+            let subs = store.account.subscriptions
+            let shown = subsExpanded ? subs : Array(subs.prefix(subsCollapsedLimit))
+            out += shown.map { $0.channelId.isEmpty ? $0.title : $0.channelId }
+            if subs.count > subsCollapsedLimit { out.append("__more") }
+        } else {
+            let subs = store.subscriptions
+            let shown = subsExpanded ? subs : Array(subs.prefix(subsCollapsedLimit))
+            out += shown
+            if subs.count > subsCollapsedLimit { out.append("__more") }
+        }
+        out += ["Your channel", "History", "Playlists", "Watch later", "Liked videos", "Your videos"]
+        return out
+    }
+    private func focusTarget(_ key: String) -> FocusTarget? {
+        focusItems.firstIndex(of: key).map { FocusTarget(.sidebar, $0) }
     }
 
     private func row(_ label: String, _ symbol: String) -> some View {
         Button {
-            selected = label
-            switch label {
-            case "Home": store.goHome()
-            case "Shorts": store.openShorts()
-            case "Subscriptions": store.openSubscriptions()
-            case "History": store.openHistory()
-            case "Playlists": store.openPlaylists()
-            case "Watch later": store.openWatchLater()
-            case "Liked videos": store.openLiked()
-            case "Your channel", "Your videos": store.openMyChannel()
-            default: break
-            }
+            activateRow(label)
         } label: {
             HStack(spacing: 20) {
                 Image(systemName: symbol).font(.system(size: 16)).frame(width: 22)
@@ -1163,6 +1219,7 @@ private struct SidebarView: View {
             .contentShape(RoundedRectangle(cornerRadius: 10))
         }
         .buttonStyle(.plain).clickable()
+        .modifier(OptionalFocus(target: focusTarget(label), shape: .rect(10)) { activateRow(label) })
     }
 
     private func channelRow(title: String, thumb: String?, channelId: String?) -> some View {
@@ -1178,6 +1235,7 @@ private struct SidebarView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain).clickable()
+        .modifier(OptionalFocus(target: focusTarget(channelId ?? title), shape: .rect(10)) { if let cid = channelId, !cid.isEmpty { store.openChannel(cid) } })
     }
 
     private func monogram(_ name: String) -> some View {
@@ -1216,6 +1274,15 @@ private struct FeedView: View {
     }
 
     private static let topAnchor = "feedTop"
+    @ObservedObject private var focusEngine = FocusEngine.shared
+
+    /// Tell the focus engine how many cards are on screen and how wide a row is, so Up/Down move
+    /// by exactly one visual row. Uses the SAME helper the layout uses, so they can't disagree.
+    private func publishFocusGeometry() {
+        focusEngine.setItems(.grid, shown.map(\.id))
+        focusEngine.setItems(.chips, isSearch || store.feedHeading != nil ? [] : chipItems)
+        focusEngine.setColumns(Grid3.columnCount(for: gridW))
+    }
 
     private var isSearch: Bool { !store.searchQuery.isEmpty }
 
@@ -1314,8 +1381,11 @@ private struct FeedView: View {
                         if store.feedMode == "history" || store.feedMode == "playlist" {
                             // Per-position identity: these feeds may legitimately repeat a video.
                             ForEach(Array(shown.enumerated()), id: \.offset) { idx, v in
-                                Button { store.openWatch(v.id) } label: { VideoCard(video: v) }
+                                Button { store.openWatch(v.id) } label: {
+                                    VideoCard(video: v, focusTarget: FocusTarget(.grid, idx))
+                                }
                                     .buttonStyle(CardPress())
+                                    .id(FocusTarget(.grid, idx))
                                     .onAppear {
                                         if idx == shown.count - 1 { Task { await store.loadMore() } }
                                     }
@@ -1323,9 +1393,12 @@ private struct FeedView: View {
                         } else {
                             // Stable video-id identity: chip switches / search swaps must NOT
                             // recycle a card's @State + image onto a different video.
-                            ForEach(shown) { v in
-                                Button { store.openWatch(v.id) } label: { VideoCard(video: v) }
+                            ForEach(Array(shown.enumerated()), id: \.element.id) { idx, v in
+                                Button { store.openWatch(v.id) } label: {
+                                    VideoCard(video: v, focusTarget: FocusTarget(.grid, idx))
+                                }
                                     .buttonStyle(CardPress())
+                                    .id(FocusTarget(.grid, idx))
                                     .onAppear {
                                         if v.id == shown.last?.id { Task { await store.loadMore() } }
                                     }
@@ -1342,6 +1415,17 @@ private struct FeedView: View {
             // Any feed navigation (logo → Home, Subscriptions, History, …) starts at the top.
             .onChange(of: store.feedTopToken) { _, _ in
                 proxy.scrollTo(Self.topAnchor, anchor: .top)
+            }
+            // Keyboard navigation: publish what's on screen so the engine can do its index
+            // arithmetic, and scroll the focused card in (the grid is lazy, so focus can move to a
+            // row that isn't materialised yet).
+            .onAppear { publishFocusGeometry() }
+            .onChange(of: shown.count) { _, _ in publishFocusGeometry() }
+            .onChange(of: gridW) { _, _ in publishFocusGeometry() }
+            .onChange(of: focusEngine.scrollTick) { _, _ in
+                if let f = focusEngine.focused, f.zone == .grid {
+                    withAnimation(.easeOut(duration: 0.12)) { proxy.scrollTo(f, anchor: .center) }
+                }
             }
             }   // end ScrollViewReader
         }
@@ -1388,6 +1472,9 @@ private struct FeedView: View {
 
     private var isHDRTab: Bool { selectedChip == "HDR" && !isSearch && store.feedHeading == nil }
 
+    /// The chips in visual order — the same list the engine navigates.
+    private var chipItems: [String] { ["Your custom feed", "All", "HDR"] + channelChips }
+
     private func chip(_ label: String, icon: String?) -> some View {
         let active = selectedChip == label
         return Button { selectedChip = label } label: {
@@ -1400,6 +1487,7 @@ private struct FeedView: View {
             .foregroundStyle(active ? AnyShapeStyle(themeBackground(store.settings.theme)) : AnyShapeStyle(Color.primary))
         }
         .buttonStyle(.plain).clickable()
+        .modifier(OptionalFocus(target: chipItems.firstIndex(of: label).map { FocusTarget(.chips, $0) }, shape: .capsule) { selectedChip = label })
     }
 }
 
@@ -1802,6 +1890,10 @@ private struct HoverRowStyle: ButtonStyle {
 private struct VideoCard: View {
     @EnvironmentObject var store: Store
     let video: VideoListItem
+    /// Where this card sits in the keyboard-focus order. Optional so callers that don't take part
+    /// in focus (skeletons, previews) are unaffected.
+    var focusTarget: FocusTarget? = nil
+    @ObservedObject private var focusEngine = FocusEngine.shared
     @State private var hover = false
     @State private var channelHover = false
     @State private var showMenu = false
@@ -1809,6 +1901,9 @@ private struct VideoCard: View {
     @State private var previewOn = false
     @State private var clip: PreviewClip? = nil
     @State private var hoverTask: Task<Void, Never>? = nil
+
+    /// True only while the keyboard is driving AND this card is the focused one.
+    private var keyFocused: Bool { focusTarget.map { focusEngine.isFocused($0) } ?? false }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -1826,7 +1921,7 @@ private struct VideoCard: View {
                 // 3-dot overflow menu. Button + popover rather than SwiftUI `Menu`: an image-labelled
                 // Menu gets rendered through AppKit menu chrome that mangles the label (same trap
                 // that broke the account avatar).
-                if hover || showMenu {
+                if hover || showMenu || keyFocused {
                     Button { showMenu.toggle() } label: {
                         Image(systemName: "ellipsis")
                             .font(.system(size: 14))
@@ -1945,7 +2040,11 @@ private struct VideoCard: View {
                     .padding(8)
             }
         }
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.primary.opacity(hover ? 0.25 : 0), lineWidth: 1))
+        // Keyboard focus reuses this exact hover stroke, just in the accent the focused search
+        // field already uses — so a focused card reads like a hovered one and nothing is restyled.
+        .overlay(RoundedRectangle(cornerRadius: 12)
+            .stroke(keyFocused ? Color(red: 0.24, green: 0.65, blue: 1) : Color.primary.opacity(hover ? 0.25 : 0),
+                    lineWidth: keyFocused ? 2 : 1))
     }
 
     private var metaLine: String {
