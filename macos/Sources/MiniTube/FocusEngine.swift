@@ -85,6 +85,26 @@ final class FocusEngine: ObservableObject {
     /// keyboard — used on the watch page so YouTube's own ←/→ seek and ↑/↓ volume keep working.
     var suspended = false
 
+    // MARK: - Plex-HTPC command hooks
+    //
+    // Plex's map has commands that aren't directional: `menu`, `info`, prev/next pivot tab. They are
+    // published here rather than pushed into each view, so the key monitor stays the single place
+    // that knows the key map and the views only say what they can do.
+
+    /// Set to the focused target when `menu` (M, or a long Return) fires; the matching card opens its
+    /// own 3-dot popover and clears it. Plex calls this the "more actions" menu.
+    @Published private(set) var menuTarget: FocusTarget?
+    func requestMenu() { menuTarget = focused }
+    func clearMenu() { menuTarget = nil }
+
+    /// Plex `previous_pivot_tab` / `next_pivot_tab` ([ and ]) — the feed's filter chips are this
+    /// app's pivot tabs. Set by FeedView while it is on screen.
+    var cycleTab: ((Int) -> Void)?
+    /// Plex `info` (I) — the watch page expands/collapses the description.
+    var showInfo: (() -> Void)?
+
+
+
     func isFocused(_ target: FocusTarget) -> Bool { keyboardActive && focused == target }
 
     /// Mouse took over — hide the ring but remember where focus was.

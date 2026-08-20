@@ -400,7 +400,12 @@ struct WatchPage: View {
             visionaryResult = nil; visionarySending = false
             visionary.refreshAvailability()   // cached ~60s; never blocks
         }
-        .onAppear { seedEngagement(); visionary.refreshAvailability() }
+        .onAppear {
+            seedEngagement(); visionary.refreshAvailability()
+            // Plex `info` (I) toggles the description while the watch page is up.
+            FocusEngine.shared.showInfo = { withAnimation(.easeInOut(duration: 0.15)) { descExpanded.toggle() } }
+        }
+        .onDisappear { FocusEngine.shared.showInfo = nil }
         .onChange(of: store.watchInfo?.videoId) { _, _ in seedEngagement() }
     }
 
@@ -1282,6 +1287,13 @@ private struct FeedView: View {
         focusEngine.setItems(.grid, shown.map(\.id))
         focusEngine.setItems(.chips, isSearch || store.feedHeading != nil ? [] : chipItems)
         focusEngine.setColumns(Grid3.columnCount(for: gridW))
+        // Plex `previous_pivot_tab` / `next_pivot_tab` — the chips are this app's tabs. Clamped
+        // rather than wrapping, matching how the arrows treat the row.
+        let tabs = isSearch || store.feedHeading != nil ? [] : chipItems
+        focusEngine.cycleTab = tabs.isEmpty ? nil : { [self] delta in
+            let cur = tabs.firstIndex(of: selectedChip) ?? 0
+            selectedChip = tabs[max(0, min(tabs.count - 1, cur + delta))]
+        }
     }
 
     private var isSearch: Bool { !store.searchQuery.isEmpty }
@@ -1937,6 +1949,12 @@ private struct VideoCard: View {
                     }
                 }
             }
+        }
+        // Plex `menu`: M (or a long Return) asks the FOCUSED card to open its overflow popover.
+        .onChange(of: focusEngine.menuTarget) { _, target in
+            guard let target, let mine = focusTarget, target == mine else { return }
+            focusEngine.clearMenu()
+            showMenu = true
         }
         .onHover { hovering in
             hover = hovering

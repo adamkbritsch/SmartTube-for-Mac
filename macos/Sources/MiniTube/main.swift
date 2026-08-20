@@ -126,42 +126,139 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// app-level, not window-level, because WebKit reparents the player into its own
     /// WebCoreFullScreenWindow for YouTube fullscreen.
     private func installKeyMonitor() {
-        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .mouseMoved]) { event in
-            MainActor.assumeIsolated {
-                let engine = FocusEngine.shared
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp, .mouseMoved]) { event in
+            MainActor.assumeIsolated { self.handle(event) }
+        }
+    }
 
-                if event.type == .mouseMoved {
-                    engine.mouseTookOver()      // mouse wins: put the ring away
-                    return event
+    /// Keys held for the long-press commands (Plex: long Return = menu, long Back = home).
+    private var heldKey: UInt16?
+    private var heldFiredLong = false
+
+    private func handle(_ event: NSEvent) -> NSEvent? {
+        let engine = FocusEngine.shared
+        let player = PlayerBridge.shared
+
+        if event.type == .mouseMoved {
+            engine.mouseTookOver()      // mouse wins: put the ring away
+            return event
+        }
+
+        // Never touch a key that belongs to someone else:
+        //  • any modifier combo (⌘F, ⌘Q, ⌘C, and Plex's own ⌘F search … all keep working)
+        //  • text entry — SwiftUI's TextField editor is an NSTextView, so checking for
+        //    NSTextField would silently miss it and eat caret movement
+        let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if !mods.isDisjoint(with: [.command, .option, .control]) { return event }
+        let responder = NSApp.keyWindow?.firstResponder
+        if responder is NSTextView { return event }
+
+        // Web content splits two ways. The PLAYER is a control surface: Plex's letter commands must
+        // work while it holds first responder, since that is exactly when you are watching. Any OTHER
+        // web view is the Google sign-in form — swallowing letters there would break typing an email
+        // or password — so it passes everything through untouched.
+        let inPlayer = Self.isPlayerWebContent(responder)
+        if !inPlayer, let r = responder as? NSView, Self.isWebContent(r) { return event }
+
+        let code = event.keyCode
+        let watching = store?.watchVideoId != nil
+
+        // Leaving YouTube's element fullscreen comes before "back": in Plex, Back on a fullscreen
+        // video drops you out of fullscreen, not out of the video. Escape is WebKit's own exit, so
+        // hand it over; the other Back keys click the fullscreen button instead.
+        if PlexKeyMap.backKeys.contains(code), player.isElementFullscreen {
+            guard event.type == .keyDown else { return code == 53 ? event : nil }
+            if code == 53 { return event }
+            player.toggleFullscreen()
+            return nil
+        }
+
+        // ── Long press: Return holds to `menu`, Back holds to `home` ───────────────────────────
+        // macOS auto-repeat IS the long-press signal, so no timer is needed: the first repeat means
+        // the key is still down past the repeat delay. The short action therefore has to wait for
+        // key-up, or a long press would fire both.
+        if PlexKeyMap.longPressKeys.contains(code) {
+            switch event.type {
+            case .keyDown:
+                if event.isARepeat {
+                    if !heldFiredLong, let long = PlexKeyMap.longPress(for: code) {
+                        heldFiredLong = true
+                        _ = perform(long, inPlayer: inPlayer, watching: watching)
+                    }
+                } else {
+                    heldKey = code
+                    heldFiredLong = false
                 }
-
-                // Never touch a key that belongs to someone else:
-                //  • any modifier combo (⌘F, ⌘Q, ⌘C … all keep working)
-                //  • text entry — SwiftUI's TextField editor is an NSTextView, so checking for
-                //    NSTextField would silently miss it and eat caret movement
-                //  • any web content (the player's own ←/→ seek, and typing an email/password in
-                //    the sign-in WKWebView)
-                let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-                if !mods.isDisjoint(with: [.command, .option, .control]) { return event }
-                let responder = NSApp.keyWindow?.firstResponder
-                if responder is NSTextView { return event }
-                if let r = responder as? NSView, Self.isWebContent(r) { return event }
-
-                switch event.keyCode {
-                case 126: return engine.handle(direction: .up) ? nil : event
-                case 125: return engine.handle(direction: .down) ? nil : event
-                case 123: return engine.handle(direction: .left) ? nil : event
-                case 124: return engine.handle(direction: .right) ? nil : event
-                case 36, 76: return engine.handleActivate() ? nil : event      // Return / keypad Enter
-                case 53, 51: return engine.handleEscape() ? nil : event        // Escape / Delete(⌫) = Back
-                                                                               // (⌫ is the TV-remote
-                                                                               // back button; the text
-                                                                               // guards above keep it
-                                                                               // deleting while typing)
-                default: return event
-                }
+                return nil
+            case .keyUp:
+                defer { heldKey = nil; heldFiredLong = false }
+                guard heldKey == code, !heldFiredLong,
+                      let short = PlexKeyMap.command(for: code) else { return nil }
+                return perform(short, inPlayer: inPlayer, watching: watching) ? nil : event
+            default:
+                return event
             }
         }
+        guard event.type == .keyDown, let command = PlexKeyMap.command(for: code) else { return event }
+        return perform(command, inPlayer: inPlayer, watching: watching) ? nil : event
+    }
+
+    /// Run one Plex command. Returns whether it was consumed; anything that had nowhere to go falls
+    /// through to the normal responder chain rather than being silently eaten.
+    private func perform(_ command: PlexCommand, inPlayer: Bool, watching: Bool) -> Bool {
+        let engine = FocusEngine.shared
+        let player = PlayerBridge.shared
+
+        // Commands that act on a video need one open. `inPlayer` doesn't imply it during teardown,
+        // so both are checked.
+        if PlexKeyMap.needsVideo(command), !watching { return false }
+
+        switch command {
+        case .navigate(let d):
+            // In the player these belong to YouTube, whose native ±5s seek and volume are exactly
+            // what Plex's arrows do there — so they pass straight through rather than being remapped.
+            if inPlayer { return false }
+            return engine.handle(direction: d)
+
+        case .activate:
+            // Return in the player is play/pause (YouTube binds Space and k, but not Return).
+            if inPlayer || (watching && engine.focused == nil) { player.playPause(); return true }
+            return engine.handleActivate()
+
+        case .back:   return engine.handleEscape()
+        case .home:   store?.goHome(); return true
+        case .menu:   engine.requestMenu(); return true
+        case .info:
+            guard let showInfo = engine.showInfo else { return false }
+            showInfo(); return true
+
+        case .playPause:
+            if inPlayer { return false }        // YouTube already binds Space itself
+            player.playPause(); return true
+        case .stop:              store?.goBack(); return true
+        case .seek(let d):       player.seek(d); return true
+        case .step(let d):       player.step(d); return true
+        case .volume(let d):     player.volume(d); return true
+        case .toggleSubtitles:   player.toggleSubtitles(); return true
+        case .toggleWatched:
+            guard let id = store?.watchVideoId else { return false }
+            store?.markWatched(id); return true
+        case .cycleTab(let d):
+            guard let cycle = engine.cycleTab else { return false }
+            cycle(d); return true
+        }
+    }
+
+    /// True when the keystroke is going to the video player specifically (as opposed to the sign-in
+    /// web view), which is what makes it safe to claim letter keys.
+    private static func isPlayerWebContent(_ responder: Any?) -> Bool {
+        guard let target = PlayerBridge.shared.webView, let view = responder as? NSView else { return false }
+        var v: NSView? = view
+        while let cur = v {
+            if cur === target { return true }
+            v = cur.superview
+        }
+        return false
     }
 
     /// True when this view (or an ancestor) is a web view — i.e. the keystroke belongs to the page.

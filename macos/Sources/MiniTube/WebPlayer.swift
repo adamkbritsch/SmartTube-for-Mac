@@ -169,6 +169,7 @@ struct WebPlayer: NSViewRepresentable {
         // attests + rotates the session from here. (The gate stays so video CHANGES within a session
         // still route through load(); signInReady is just satisfied up front now.)
         context.coordinator.signInDidComplete()
+        PlayerBridge.shared.webView = webView   // Plex-HTPC key commands target this player
         return PlayerContainer(webView: webView)
     }
 
@@ -229,6 +230,7 @@ struct WebPlayer: NSViewRepresentable {
 
     // Stop audio the instant this player's view is removed.
     static func dismantleNSView(_ container: PlayerContainer, coordinator: Coordinator) {
+        if PlayerBridge.shared.webView === container.webView { PlayerBridge.shared.webView = nil }
         coordinator.stopAdSkip()
         container.webView.pauseAllMediaPlayback(completionHandler: nil)
         container.webView.loadHTMLString("", baseURL: nil)
