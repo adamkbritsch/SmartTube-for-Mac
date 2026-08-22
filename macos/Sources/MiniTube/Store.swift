@@ -23,6 +23,9 @@ final class Store: ObservableObject {
     @Published var reachable = false
     @Published var account = Account.empty
     @Published var device: DeviceInfo?   // non-nil while a code sign-in is in progress
+    /// Bumped to ask the header to focus its search field (⌘F, and the launch self-test).
+    @Published var focusSearchTick = 0
+
     @Published var watchVideoId: String?   // non-nil → watch page open for this video
     @Published var watchInfo: WatchInfo?   // metadata for the open watch page
     @Published var channelId: String?      // non-nil → channel page open (set immediately on tap)
@@ -504,6 +507,11 @@ final class Store: ObservableObject {
         // The channel page owns store.videos via openChannel(); never let a feed load
         // (e.g. the reactive one on a signedIn transition) overwrite it under the header.
         guard channelId == nil else { return }
+        // A SEARCH owns the grid too. Without this the results were reliably replaced by the home
+        // feed: search() leaves feedMode == "home", so the old guard below saw nothing had changed,
+        // and the poll at start() re-runs loadVideos on every tick while homeLoading is set. The
+        // heading still read "Results for …" over a grid of unrelated recommendations.
+        guard searchQuery.isEmpty else { return }
         // Which feed the grid shows, keyed by feedMode.
         let path: String
         switch feedMode {
@@ -513,11 +521,13 @@ final class Store: ObservableObject {
         default:              path = "/api/home"
         }
         guard let url = URL(string: "\(base)\(path)") else { return }
-        let mode = feedMode
+        // Snapshot the whole navigation context, exactly as loadMore() does — searchQuery included,
+        // which is the field this guard used to be missing. Covers a search STARTED mid-fetch.
+        let ctx = (feedMode, searchQuery, channelId)
         do {
             let (data, _) = try await URLSession.shared.data(from: url)
             guard let page = await decodeOffMain(FeedPageResponse.self, from: data, endpoint: "feed") else { return }
-            guard feedMode == mode, channelId == nil else { return }   // nav changed during fetch/decode
+            guard ctx == (feedMode, searchQuery, channelId) else { return }   // nav changed during fetch/decode
             videos = page.videos
             feedContinuation = page.continuation
             feedUnavailable = page.videos.isEmpty ? page.unavailable : nil

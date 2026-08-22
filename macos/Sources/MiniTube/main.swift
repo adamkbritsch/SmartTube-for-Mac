@@ -95,6 +95,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         store.start()
         print("[MiniTube] launched; window visible=\(window.isVisible)")
+
+        // Gated end-to-end probe for the search path: focus the field, type through the REAL event
+        // path (a local monitor runs inside sendEvent), submit, and report where it breaks. Never
+        // runs without MT_SELFTEST set.
+        if let q = ProcessInfo.processInfo.environment["MT_SELFTEST"], !q.isEmpty { runSearchSelfTest(q) }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -266,6 +271,55 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .cycleTab(let d):
             guard let cycle = engine.cycleTab else { return false }
             cycle(d); return true
+        }
+    }
+
+    /// End-to-end probe of the search path. Reports each stage so a failure says WHICH stage.
+    private func runSearchSelfTest(_ query: String) {
+        func after(_ t: Double, _ f: @escaping () -> Void) { DispatchQueue.main.asyncAfter(deadline: .now() + t, execute: f) }
+        var consumed: [UInt16] = [], seen: [UInt16] = []
+        let spy = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { e in
+            MainActor.assumeIsolated { seen.append(e.keyCode) }; return e
+        }
+        after(5) {
+            print("[selftest] --- stage 1: focus ---")
+            print("[selftest] textEntry before focus = \(FocusEngine.shared.textEntry)")
+            self.store.focusSearchTick += 1
+            after(0.6) {
+                print("[selftest] textEntry after focus  = \(FocusEngine.shared.textEntry)   <- must be true")
+                print("[selftest] --- stage 2: type \"\(query)\" through the real event path ---")
+                let codes: [Character: UInt16] = ["a":0,"s":1,"d":2,"f":3,"h":4,"g":5,"z":6,"x":7,"c":8,"v":9,
+                    "b":11,"q":12,"w":13,"e":14,"r":15,"y":16,"t":17,"o":31,"u":32,"i":34,"p":35,"l":37,"j":38,
+                    "k":40,"n":45,"m":46," ":49]
+                for ch in query.lowercased() {
+                    guard let kc = codes[ch] else { continue }
+                    let before = seen.count
+                    if let ev = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+                        timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: self.window.windowNumber,
+                        context: nil, characters: String(ch), charactersIgnoringModifiers: String(ch),
+                        isARepeat: false, keyCode: kc) {
+                        NSApp.sendEvent(ev)
+                        if seen.count == before { consumed.append(kc) }
+                    }
+                }
+                print("[selftest] keys the monitor swallowed: \(consumed.isEmpty ? "none" : String(describing: consumed))")
+                print("[selftest] --- stage 3: submit ---")
+                if let ret = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+                    timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: self.window.windowNumber,
+                    context: nil, characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36) {
+                    NSApp.sendEvent(ret)
+                }
+                after(4) {
+                    print("[selftest] --- stage 4: result ---")
+                    print("[selftest] store.searchQuery = \"\(self.store.searchQuery)\"  (expected \"\(query)\")")
+                    print("[selftest] store.videos.count = \(self.store.videos.count)")
+                    print("[selftest] VERDICT: " + (self.store.searchQuery == query && self.store.videos.count > 0
+                          ? "search works" : "SEARCH BROKEN"))
+                    if let spy { NSEvent.removeMonitor(spy) }
+                    // MT_SELFTEST_HOLD keeps the window up for a screenshot.
+                    if ProcessInfo.processInfo.environment["MT_SELFTEST_HOLD"] == nil { exit(0) }
+                }
+            }
         }
     }
 

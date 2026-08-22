@@ -1048,6 +1048,7 @@ private struct HeaderBar: View {
     private var searchField: some View {
         HStack(spacing: 8) {
             TextField("Search", text: $search)
+                .onChange(of: store.focusSearchTick) { _, _ in searchFocused = true }
                 .onChange(of: searchFocused) { _, on in
                     // Hand the Plex key map the one fact it can't infer: the keyboard is being used
                     // to TYPE, not to drive the UI.
@@ -1289,6 +1290,20 @@ private struct FeedView: View {
 
     /// Tell the focus engine how many cards are on screen and how wide a row is, so Up/Down move
     /// by exactly one visual row. Uses the SAME helper the layout uses, so they can't disagree.
+    /// Scroll anchors for the grid cards.
+    ///
+    /// These MUST equal the identity each ForEach branch already uses. Attaching a `.id()` that
+    /// DISAGREES replaces SwiftUI's identity with a positional one, and the cards then get recycled
+    /// across a feed swap — @State and image included. That is precisely what broke search: the
+    /// store held the right results while the grid went on rendering the previous home feed, so the
+    /// heading read "Results for …" over unrelated videos. Keyboard focus needs an anchor to scroll
+    /// to; it does not get to redefine what a card IS.
+    private var gridAnchors: [String] {
+        store.feedMode == "history" || store.feedMode == "playlist"
+            ? shown.indices.map { "g\($0)" }        // per-position: these feeds may repeat a video
+            : shown.map(\.id)                       // stable video-id identity
+    }
+
     private func publishFocusGeometry() {
         focusEngine.setItems(.grid, shown.map(\.id))
         focusEngine.setItems(.chips, isSearch || store.feedHeading != nil ? [] : chipItems)
@@ -1403,7 +1418,7 @@ private struct FeedView: View {
                                     VideoCard(video: v, focusTarget: FocusTarget(.grid, idx))
                                 }
                                     .buttonStyle(CardPress())
-                                    .id(FocusTarget(.grid, idx))
+                                    .id("g\(idx)")          // == this branch's \.offset identity
                                     .onAppear {
                                         if idx == shown.count - 1 { Task { await store.loadMore() } }
                                     }
@@ -1416,7 +1431,7 @@ private struct FeedView: View {
                                     VideoCard(video: v, focusTarget: FocusTarget(.grid, idx))
                                 }
                                     .buttonStyle(CardPress())
-                                    .id(FocusTarget(.grid, idx))
+                                    .id(v.id)                // == this branch's \.element.id identity
                                     .onAppear {
                                         if v.id == shown.last?.id { Task { await store.loadMore() } }
                                     }
@@ -1441,8 +1456,8 @@ private struct FeedView: View {
             .onChange(of: shown.count) { _, _ in publishFocusGeometry() }
             .onChange(of: gridW) { _, _ in publishFocusGeometry() }
             .onChange(of: focusEngine.scrollTick) { _, _ in
-                if let f = focusEngine.focused, f.zone == .grid {
-                    withAnimation(.easeOut(duration: 0.12)) { proxy.scrollTo(f, anchor: .center) }
+                if let f = focusEngine.focused, f.zone == .grid, f.index < gridAnchors.count {
+                    withAnimation(.easeOut(duration: 0.12)) { proxy.scrollTo(gridAnchors[f.index], anchor: .center) }
                 }
             }
             }   // end ScrollViewReader
