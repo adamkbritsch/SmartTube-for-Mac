@@ -1048,6 +1048,12 @@ private struct HeaderBar: View {
     private var searchField: some View {
         HStack(spacing: 8) {
             TextField("Search", text: $search)
+                .onChange(of: searchFocused) { _, on in
+                    // Hand the Plex key map the one fact it can't infer: the keyboard is being used
+                    // to TYPE, not to drive the UI.
+                    FocusEngine.shared.textEntry = on
+                    FocusEngine.shared.blurText = { searchFocused = false }
+                }
                 .textFieldStyle(.plain)
                 .font(.system(size: 14))
                 .focused($searchFocused)

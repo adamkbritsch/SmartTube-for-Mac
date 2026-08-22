@@ -151,6 +151,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         if !mods.isDisjoint(with: [.command, .option, .control]) { return event }
         let responder = NSApp.keyWindow?.firstResponder
+
+        // TEXT ENTRY WINS, unconditionally. The Plex map claims bare letters (H home, X stop,
+        // B back …) and Return, so a search box that does not get this right looks completely
+        // broken: typing "how to" jumps home on the first letter and Return never reaches onSubmit.
+        //
+        // The signal is SwiftUI's own @FocusState, published by the search field. An earlier
+        // `responder is NSTextView` check shipped instead and BROKE SEARCH COMPLETELY: a probe
+        // reproducing this exact structure (NSHostingView + TextField + @FocusState + this monitor)
+        // showed `NSApp.keyWindow?.firstResponder` reporting **nil** while the field genuinely had
+        // focus, so the class never matched and every keystroke fell through to the command map —
+        // "how" typed nothing and jumped home. @FocusState reported the truth in the same run.
+        // See tools/keyguard-probe. The class check stays only as a secondary net.
+        if event.type == .keyDown, MTDebug.enabled, engine.textEntry || responder is NSTextView {
+            MTDebug.log("[keys] text entry — responder=\(responder.map { String(describing: type(of: $0)) } ?? "nil") focusState=\(engine.textEntry)")
+        }
+        if engine.textEntry {
+            // Escape leaves the field rather than navigating back.
+            if event.type == .keyDown, event.keyCode == 53, let blur = engine.blurText { blur(); return nil }
+            return event
+        }
         if responder is NSTextView { return event }
 
         // Web content splits two ways. The PLAYER is a control surface: Plex's letter commands must

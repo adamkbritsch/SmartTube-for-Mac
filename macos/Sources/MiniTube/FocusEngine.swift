@@ -103,6 +103,18 @@ final class FocusEngine: ObservableObject {
     /// Plex `info` (I) — the watch page expands/collapses the description.
     var showInfo: (() -> Void)?
 
+    /// True while a text field has the keyboard. THE guard that keeps the Plex letter commands from
+    /// eating what the user is typing — H would jump home, Return would never reach onSubmit, and
+    /// search would appear completely broken.
+    ///
+    /// Driven by SwiftUI's own `@FocusState` rather than by inspecting
+    /// `NSApp.keyWindow?.firstResponder`: SwiftUI on macOS does its own focus routing and does NOT
+    /// reliably put an NSTextView in the responder chain for a focused TextField, so the class check
+    /// this replaces silently failed and let every keystroke through to the command map.
+    var textEntry = false
+    /// Lets Escape leave a text field instead of navigating back.
+    var blurText: (() -> Void)?
+
 
 
     func isFocused(_ target: FocusTarget) -> Bool { keyboardActive && focused == target }
