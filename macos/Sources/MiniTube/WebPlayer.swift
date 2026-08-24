@@ -349,6 +349,12 @@ struct WebPlayer: NSViewRepresentable {
                 onEnhanceInfo(h, a, hdr)
             case "theater":
                 onTheater()
+            case "fullscreen-request":
+                // Re-issue the very click the page just made, but from here — a host-initiated
+                // click carries the user gesture WebKit's Fullscreen API insists on.
+                (message.webView ?? adSkipWebView)?.evaluateJavaScript(
+                    "window.__mtFsPass=true;var b=document.querySelector('.ytp-fullscreen-button');if(b)b.click();window.__mtFsPass=false;",
+                    completionHandler: nil)
             case "ended":
                 onEnded()
             case "markWatched":
@@ -441,6 +447,16 @@ struct WebPlayer: NSViewRepresentable {
         if(btn){
           e.preventDefault(); e.stopImmediatePropagation();
           try { window.webkit.messageHandlers.minitube.postMessage({action:'theater'}); } catch(err){}
+          return;
+        }
+        // YouTube's fullscreen button, clicked in-page, does not enter fullscreen in this WKWebView
+        // — the same user-gesture problem autoFullscreenTick documents, which is why THAT clicks the
+        // button from a host evaluateJavaScript call instead. So hand the user's click to the host
+        // and let it drive the identical, working path. __mtFsPass lets the host's own click through.
+        var fsb = t && t.closest && t.closest('.ytp-fullscreen-button');
+        if(fsb && !window.__mtFsPass){
+          e.preventDefault(); e.stopImmediatePropagation();
+          try { window.webkit.messageHandlers.minitube.postMessage({action:'fullscreen-request'}); } catch(err){}
         }
       }, true);
     })();

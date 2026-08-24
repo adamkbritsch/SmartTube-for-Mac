@@ -100,6 +100,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // path (a local monitor runs inside sendEvent), submit, and report where it breaks. Never
         // runs without MT_SELFTEST set.
         if let q = ProcessInfo.processInfo.environment["MT_SELFTEST"], !q.isEmpty { runSearchSelfTest(q) }
+        if let v = ProcessInfo.processInfo.environment["MT_FSTEST"], !v.isEmpty { runFullscreenSelfTest(v) }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -265,6 +266,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .step(let d):       player.step(d); return true
         case .volume(let d):     player.volume(d); return true
         case .toggleSubtitles:   player.toggleSubtitles(); return true
+        case .toggleFullscreen:  player.toggleFullscreen(); return true
         case .toggleWatched:
             guard let id = store?.watchVideoId else { return false }
             store?.markWatched(id); return true
@@ -318,6 +320,75 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     if let spy { NSEvent.removeMonitor(spy) }
                     // MT_SELFTEST_HOLD keeps the window up for a screenshot.
                     if ProcessInfo.processInfo.environment["MT_SELFTEST_HOLD"] == nil { exit(0) }
+                }
+            }
+        }
+    }
+
+    /// Probe for YouTube's on-screen fullscreen button: is it there, is anything covering it, and
+    /// does a REAL click (a synthesized NSEvent, which WebKit treats as a genuine user gesture —
+    /// unlike a JS-dispatched MouseEvent) actually enter fullscreen?
+    private func runFullscreenSelfTest(_ videoId: String) {
+        func after(_ t: Double, _ f: @escaping () -> Void) { DispatchQueue.main.asyncAfter(deadline: .now() + t, execute: f) }
+        let hadAuto = ProcessInfo.processInfo.environment["MT_FSTEST_AUTO"] != "keep"
+        if hadAuto { self.store.setAutoFullscreen(false) }   // restored by the caller script
+        after(4) {
+            self.store.openWatch(videoId)
+            after(10) {
+                guard let wv = PlayerBridge.shared.webView else { print("[fs] NO player web view"); return }
+                let probe = """
+                (function(){
+                  var b=document.querySelector('.ytp-fullscreen-button');
+                  if(!b) return JSON.stringify({button:false});
+                  var r=b.getBoundingClientRect();
+                  var cx=r.left+r.width/2, cy=r.top+r.height/2;
+                  var top=document.elementFromPoint(cx,cy);
+                  return JSON.stringify({button:true, rect:[Math.round(r.left),Math.round(r.top),Math.round(r.width),Math.round(r.height)],
+                    cx:Math.round(cx), cy:Math.round(cy),
+                    topEl: top ? (top.className||top.tagName) : null,
+                    hitsButton: !!(top && (top===b || b.contains(top) || (top.closest && top.closest('.ytp-fullscreen-button')))),
+                    fsEnabled: !!(document.fullscreenEnabled), inFs: !!(document.fullscreenElement),
+                    vw: window.innerWidth, vh: window.innerHeight});
+                })()
+                """
+                // Record what the PAGE actually receives, so a failed click can be told apart from a
+                // click that never arrived.
+                wv.evaluateJavaScript("""
+                    window.__mtEv=[];
+                    ['mousedown','mouseup','click'].forEach(function(n){
+                      document.addEventListener(n, function(e){
+                        window.__mtEv.push(n+'@'+Math.round(e.clientX)+','+Math.round(e.clientY)+
+                          ' on '+((e.target&&(e.target.className||e.target.tagName))||'?')+
+                          (e.isTrusted?' trusted':' synthetic'));
+                      }, true);
+                    }); 'ok'
+                """, completionHandler: nil)
+                wv.evaluateJavaScript(probe) { res, err in
+                    print("[fs] probe: \(res ?? (err?.localizedDescription as Any))")
+                    guard let json = res as? String,
+                          let d = try? JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any],
+                          let cx = d["cx"] as? Int, let cy = d["cy"] as? Int else { return }
+                    // Synthesize a real click at the button, in window coordinates (AppKit origin is
+                    // bottom-left; the web rect is top-left within the web view).
+                    let inWV = NSPoint(x: CGFloat(cx), y: wv.bounds.height - CGFloat(cy))
+                    let inWin = wv.convert(inWV, to: nil)
+                    print("[fs] wv.bounds=\(wv.bounds) inWV=\(inWV) inWin=\(inWin) wvWindow=\(wv.window?.windowNumber ?? -1) mainWindow=\(self.window.windowNumber)")
+                    // A trusted OS-level click cannot be synthesized from inside the app (NSEvent
+                    // and CGEvent both verified undelivered to web content). But the interceptor
+                    // path can be driven exactly: an in-page .click() fires the same capture-phase
+                    // listener a real click does, which posts fullscreen-request to the host, which
+                    // re-clicks with the pass flag — the path the user's click takes.
+                    _ = inWin   // (kept for the geometry printout above)
+                    wv.evaluateJavaScript("document.querySelector('.ytp-fullscreen-button').click(); 'clicked'") { r, e in
+                        print("[fs] in-page click dispatched: \(r ?? e?.localizedDescription ?? "nil")")
+                    }
+                    after(2.5) {
+                        wv.evaluateJavaScript("JSON.stringify(window.__mtEv||[])") { ev, _ in print("[fs] page received: \(ev ?? "nil")") }
+                        wv.evaluateJavaScript("JSON.stringify({inFs:!!document.fullscreenElement, w:window.innerWidth, h:window.innerHeight})") { r2, _ in
+                            print("[fs] after real click: \(r2 ?? "nil")")
+                            print("[fs] VERDICT: " + (((r2 as? String)?.contains("\"inFs\":true")) == true ? "button works" : "BUTTON DOES NOT ENTER FULLSCREEN"))
+                        }
+                    }
                 }
             }
         }

@@ -314,6 +314,13 @@ struct WatchPage: View {
                     .strokeBorder(Color.white.opacity(0.14 * t), lineWidth: 1)
             )
             .offset(x: x, y: y)
+            // `including:` is load-bearing, not a tidy-up. The guard inside onChanged stops the
+            // STATE update, but the recognizer was still installed over the web view at full size,
+            // and a DragGesture with a minimumDistance holds mouse-down while it waits to see
+            // whether the movement becomes a drag — so YouTube's own controls never saw the click.
+            // That is why the on-screen fullscreen button did nothing (auto-fullscreen still
+            // worked, because it clicks the button from the host side, bypassing AppKit entirely).
+            // `.subviews` leaves the gesture inert at full size and lets the clicks through.
             .gesture(
                 DragGesture(minimumDistance: 2)
                     .onChanged { g in
@@ -321,7 +328,8 @@ struct WatchPage: View {
                         miniDrag = CGSize(width: dragStart.width + g.translation.width,
                                           height: dragStart.height + g.translation.height)
                     }
-                    .onEnded { _ in if shrunk { dragStart = miniDrag } }
+                    .onEnded { _ in if shrunk { dragStart = miniDrag } },
+                including: shrunk ? .all : .subviews
             )
     }
 
