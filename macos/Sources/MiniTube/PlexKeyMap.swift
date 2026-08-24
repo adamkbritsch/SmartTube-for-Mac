@@ -29,7 +29,7 @@ enum PlexCommand: Equatable {
     case seek(Double)               // PageUp/PageDown, F/R — Plex documents 10s
     case step(Double)               // Home/End — a chapter, or 10 minutes without them
     case volume(Double)             // = / -
-    case toggleFullscreen           // F, \\ — see the note on F below
+    case toggleFullscreen           // \\ (and Meta+Ctrl+F, which passes through as a modifier combo)
     case toggleSubtitles            // S / L
     case toggleWatched              // W
     case cycleTab(Int)              // [ / ]
@@ -62,17 +62,13 @@ enum PlexKeyMap {
         case 34: return .info                          // I
         case 49, 35: return .playPause                 // Space / P
         case 7:  return .stop                          // X
-        case 116: return .seek(10)                     // PageUp
-        case 121: return .seek(-10)                    // PageDown
-
-        // F is fullscreen here, NOT Plex's seek_forward. A DELIBERATE divergence: this app is a
-        // YouTube front end, `f` is the universal YouTube fullscreen key, and it is what the user
-        // actually reaches for. Plex only binds F/R to seek as aliases for Harmony Hub remotes, and
-        // the research on the Steam layouts found F/R appear there only as FPS-template leftovers
-        // that hit seek by accident — no deliberate layout binds them. PageUp/PageDown (which every
-        // deliberate layout does bind) remain the seek keys, so nothing real is lost.
-        // \\ is Plex's own documented toggle_fullscreen key, kept alongside.
-        case 3, 42: return .toggleFullscreen           // F / \\
+        case 116, 3:  return .seek(10)                 // PageUp / F
+        case 121, 15: return .seek(-10)                // PageDown / R
+        case 42: return .toggleFullscreen              // \\ — Plex's toggle_fullscreen key. NOTE:
+                                                       // F is seek_forward here, faithful to the
+                                                       // shipped map, NOT YouTube's fullscreen key —
+                                                       // fullscreen is \\, the on-screen button, or
+                                                       // the app's native green-button fullscreen.
         case 119: return .step(600)                    // End  — next chapter, else +10 min
         case 115: return .step(-600)                   // Home — prev chapter, else -10 min
         case 24, 69: return .volume(0.05)              // = / + , keypad +
