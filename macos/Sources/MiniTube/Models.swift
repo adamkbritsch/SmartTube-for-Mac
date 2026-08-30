@@ -88,6 +88,17 @@ struct VideoListItem: Codable, Identifiable, Hashable {
     /// YouTube's own overflow-menu actions for this card. Empty where YouTube offers none
     /// (e.g. search results) — normal, not an error. Decode-tolerant via the init below.
     var feedback: [FeedbackOption] = []
+    var playlistId: String? = nil      // set → this item is a PLAYLIST (search results); open /playlist
+    var videoCountText: String? = nil  // playlist badge, YouTube's wording ("51 videos")
+}
+
+extension VideoListItem {
+    /// The item's real youtube.com URL — playlists and videos live at different paths, so every
+    /// "Copy link" / "Open in YouTube" / Visionary send goes through this one place.
+    var webURL: String {
+        if let pid = playlistId { return "https://www.youtube.com/playlist?list=\(pid)" }
+        return "https://www.youtube.com/watch?v=\(id)"
+    }
 }
 
 /// One action from a card's 3-dot menu, carrying the token that performs it.
@@ -127,6 +138,8 @@ extension VideoListItem {
         channelAvatar = try? c.decode(String.self, forKey: .channelAvatar)
         previewUrl = try? c.decode(String.self, forKey: .previewUrl)
         feedback = (try? c.decode([FeedbackOption].self, forKey: .feedback)) ?? []
+        playlistId = try? c.decode(String.self, forKey: .playlistId)
+        videoCountText = try? c.decode(String.self, forKey: .videoCountText)
     }
 }
 

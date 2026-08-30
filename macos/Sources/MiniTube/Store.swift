@@ -32,7 +32,7 @@ final class Store: ObservableObject {
     @Published var channelInfo: ChannelInfo?  // header + first page of the open channel
     @Published var playlists: [Playlist]?  // non-nil → Playlists grid page
     @Published var shortsFeed: [ShortItem]?  // non-nil → Shorts grid page
-    private var playlistId = ""            // current playlist detail (WL | LL | PL…)
+    private(set) var playlistId = ""       // current playlist detail (WL | LL | PL…); read by the heading's Visionary button
     private var playlistTitle = ""
     private var playlistFromGrid = false   // playlist detail was opened from the Playlists grid
     /// Live playback readouts (resolution/sharpen/HDR) live in their OWN observable:
@@ -262,6 +262,21 @@ final class Store: ObservableObject {
         feedMode = "playlist"; videos = []; feedContinuation = nil
         Task { await loadVideos() }
     }
+    /// Open a grid item the right way round: playlist results open the playlist page, everything
+    /// else is a video. Both the mouse (card tap) and the keyboard (Enter on a focused card) come
+    /// through here so the two paths can't disagree.
+    func openItem(_ v: VideoListItem) {
+        if let pid = v.playlistId { openPlaylist(pid, title: title(for: v), fromGrid: true) }
+        else { openWatch(v.id) }
+    }
+    func openItemById(_ id: String) {
+        if let v = videos.first(where: { $0.id == id }) ?? hdrVideos.first(where: { $0.id == id }) {
+            openItem(v)
+        } else {
+            openWatch(id)   // not in the visible grid (shouldn't happen) — treat as a video
+        }
+    }
+
     func openWatchLater() { openPlaylist("WL", title: "Watch later") }
     func openLiked() { openPlaylist("LL", title: "Liked videos") }
 
@@ -724,6 +739,24 @@ final class Store: ObservableObject {
     }
     @Published var feedbackUndo: FeedbackUndo?
     @Published var feedbackError: String?
+
+    /// Transient result of a Visionary send fired from a card menu or page header (the watch page's
+    /// button shows its result inline instead). Auto-clears; orange when it's a failure.
+    @Published var visionaryNote: String?
+    @Published var visionaryNoteIsError = false
+    func sendToVisionary(url: String, title: String) {
+        Task {
+            let r = await VisionaryBridge.shared.send(url: url, title: title)
+            withAnimation { visionaryNote = r.label; visionaryNoteIsError = r.isError }
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            withAnimation { visionaryNote = nil }
+        }
+    }
+    /// Playlists Visionary's downloader can actually fetch: public list ids. WL/LL are private to
+    /// the signed-in account and RD mixes are generated per-session — sending those can only fail.
+    static func visionarySendablePlaylist(_ id: String) -> Bool {
+        id.hasPrefix("PL") || id.hasPrefix("OLAK") || id.hasPrefix("UU")
+    }
     private var undoDismissTask: Task<Void, Never>?
 
     /// Apply one of YouTube's own menu actions to a feed card. The card disappears immediately

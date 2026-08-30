@@ -22,6 +22,8 @@ struct VideoListItem: Content {
     /// recommend channel", "Remove from watch history", …). Empty where YouTube offers none
     /// (search results carry no feedback tokens) — that's normal, not a failure.
     var feedback: [FeedbackOption] = []
+    var playlistId: String? = nil      // set → this item is a PLAYLIST; open /playlist, not /watch
+    var videoCountText: String? = nil  // playlist badge ("51 videos"), YouTube's wording
 }
 
 /// A feedback action surfaced in the card's 3-dot menu, with the token needed to perform it.
@@ -384,7 +386,8 @@ enum VideosController {
             viewCountText: fv.views, publishedText: fv.published,
             channelId: fv.channelId, channelAvatar: fv.channelAvatar,
             previewUrl: fv.previewUrl,
-            feedback: fv.feedback.map { FeedbackOption(kind: $0.kind, label: $0.label, token: $0.token, undoToken: $0.undoToken) }
+            feedback: fv.feedback.map { FeedbackOption(kind: $0.kind, label: $0.label, token: $0.token, undoToken: $0.undoToken) },
+            playlistId: fv.playlistId, videoCountText: fv.videoCountText
         )
     }
 

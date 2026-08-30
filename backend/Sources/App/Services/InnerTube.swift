@@ -99,6 +99,8 @@ enum InnerTube {
         let durationSeconds: Double?
         var previewUrl: String? = nil   // animated hover preview (an_webp), if YouTube provides one
         var feedback: [FeedbackAction] = []   // overflow-menu actions; empty where YouTube offers none
+        var playlistId: String? = nil        // set → this item IS a playlist (id == contentId)
+        var videoCountText: String? = nil    // playlist badge, YouTube's own wording ("51 videos")
     }
 
     /// The signed animated-preview URL (`i.ytimg.com/an_webp/…mqdefault_6s.webp`) YouTube ships
@@ -334,7 +336,9 @@ enum InnerTube {
         guard let json = await call(path: "search", body: body, session: session, client: client) else {
             return FeedPage(videos: [], continuation: nil)
         }
-        return page(from: json)
+        // The one surface where playlist lockups come through (the HDR shelf reuses this with
+        // params and simply gets none back from that filter).
+        return page(from: json, includePlaylists: true)
     }
 
     /// YouTube's "HDR" search-results filter. Every returned video is HDR-tagged by YouTube,
@@ -346,13 +350,13 @@ enum InnerTube {
         guard let json = await call(path: "search", body: body, session: session, client: client) else {
             return FeedPage(videos: [], continuation: nil)
         }
-        return page(from: json)
+        return page(from: json, includePlaylists: true)
     }
 
-    private static func page(from json: Any) -> FeedPage {
+    private static func page(from json: Any, includePlaylists: Bool = false) -> FeedPage {
         var acc: [String: FeedVideo] = [:]
         var order: [String] = []
-        walkVideos(json, into: &acc, order: &order)
+        walkVideos(json, into: &acc, order: &order, includePlaylists: includePlaylists)
         return FeedPage(videos: order.compactMap { acc[$0] }, continuation: continuationToken(json))
     }
 
@@ -383,12 +387,12 @@ enum InnerTube {
         "compactPromotedVideoRenderer", "statementBannerRenderer",
     ]
 
-    private static func walkVideos(_ node: Any, into acc: inout [String: FeedVideo], order: inout [String]) {
+    private static func walkVideos(_ node: Any, into acc: inout [String: FeedVideo], order: inout [String], includePlaylists: Bool = false) {
         if let dict = node as? [String: Any] {
             // Skip ad/promoted subtrees entirely.
             if dict.keys.contains(where: { adKeys.contains($0) }) { return }
             // Modern YouTube web home feed: lockupViewModel.
-            if let lvm = dict["lockupViewModel"] as? [String: Any] { addLockup(lvm, into: &acc, order: &order) }
+            if let lvm = dict["lockupViewModel"] as? [String: Any] { addLockup(lvm, into: &acc, order: &order, includePlaylists: includePlaylists) }
             // Legacy renderer (ads / older shelves).
             if let vid = dict["videoId"] as? String, dict["thumbnail"] != nil,
                let title = text(dict["title"]), !title.isEmpty, acc[vid] == nil {
@@ -406,9 +410,9 @@ enum InnerTube {
                 )
                 order.append(vid)
             }
-            for value in dict.values { walkVideos(value, into: &acc, order: &order) }
+            for value in dict.values { walkVideos(value, into: &acc, order: &order, includePlaylists: includePlaylists) }
         } else if let arr = node as? [Any] {
-            for value in arr { walkVideos(value, into: &acc, order: &order) }
+            for value in arr { walkVideos(value, into: &acc, order: &order, includePlaylists: includePlaylists) }
         }
     }
 
@@ -451,9 +455,17 @@ enum InnerTube {
         return out
     }
 
-    private static func addLockup(_ lvm: [String: Any], into acc: inout [String: FeedVideo], order: inout [String]) {
+    /// Collection lockups that open as a playlist (albums and podcasts carry playlist ids too).
+    private static let playlistLockupTypes = ["PLAYLIST", "ALBUM", "PODCAST"]
+
+    private static func addLockup(_ lvm: [String: Any], into acc: inout [String: FeedVideo], order: inout [String], includePlaylists: Bool = false) {
         guard let id = lvm["contentId"] as? String, acc[id] == nil else { return }
-        if let ct = lvm["contentType"] as? String, !ct.contains("VIDEO") { return }   // skip playlists/channels
+        let ct = lvm["contentType"] as? String ?? ""
+        if includePlaylists, playlistLockupTypes.contains(where: { ct.contains($0) }) {
+            addPlaylistLockup(lvm, id: id, into: &acc, order: &order)
+            return
+        }
+        if !ct.isEmpty, !ct.contains("VIDEO") { return }   // skip playlists/channels/mixes elsewhere
         guard let title = dig(lvm, "metadata", "lockupMetadataViewModel", "title", "content") as? String else { return }
 
         var parts: [String] = []
@@ -479,6 +491,48 @@ enum InnerTube {
             feedback: feedbackActions(inLockup: lvm, contentId: id)
         )
         order.append(id)
+    }
+
+    /// A playlist/album/podcast search result. Shape (probed live): thumbnail under
+    /// `collectionThumbnailViewModel.primaryThumbnail.thumbnailViewModel`, the "51 videos" badge in
+    /// its overlays, title on the shared metadata path, first metadata part = the owner's name.
+    private static func addPlaylistLockup(_ lvm: [String: Any], id: String, into acc: inout [String: FeedVideo], order: inout [String]) {
+        // Never surface Mixes (RD…): they're per-session radios, and browsing one returns an empty
+        // page (verified live) — the card would open onto nothing.
+        guard !id.hasPrefix("RD") else { return }
+        guard let title = dig(lvm, "metadata", "lockupMetadataViewModel", "title", "content") as? String else { return }
+        var parts: [String] = []
+        if let rows = dig(lvm, "metadata", "lockupMetadataViewModel", "metadata", "contentMetadataViewModel", "metadataRows") as? [[String: Any]] {
+            for row in rows {
+                for part in (row["metadataParts"] as? [[String: Any]] ?? []) {
+                    if let t = dig(part, "text", "content") as? String { parts.append(t) }
+                }
+            }
+        }
+        let thumbVM = dig(lvm, "contentImage", "collectionThumbnailViewModel", "primaryThumbnail", "thumbnailViewModel") as? [String: Any] ?? [:]
+        let thumbURL = (dig(thumbVM, "image", "sources") as? [[String: Any]])?.last?["url"] as? String ?? ""
+        acc[id] = FeedVideo(
+            id: id, title: title,
+            channel: parts.first ?? "",
+            channelId: channelId(in: lvm),
+            channelAvatar: firstYT3URL(lvm),
+            thumbnail: thumbURL,
+            views: nil, published: nil, durationSeconds: nil,
+            playlistId: id,
+            videoCountText: badgeText(in: thumbVM)
+        )
+        order.append(id)
+    }
+
+    /// First thumbnail-overlay badge text in the subtree ("51 videos", "Album", …).
+    private static func badgeText(in node: Any) -> String? {
+        if let d = node as? [String: Any] {
+            if let b = d["thumbnailBadgeViewModel"] as? [String: Any], let t = b["text"] as? String { return t }
+            for v in d.values { if let r = badgeText(in: v) { return r } }
+        } else if let a = node as? [Any] {
+            for v in a { if let r = badgeText(in: v) { return r } }
+        }
+        return nil
     }
 
     /// The channel avatar URL — the only yt3.* image in a video lockup/renderer

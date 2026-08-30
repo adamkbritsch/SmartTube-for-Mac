@@ -101,7 +101,7 @@ struct ContentView: View {
             engine.activate = { target in
                 switch target.zone {
                 case .grid:
-                    if let id = engine.id(target) { store.openWatch(id) }
+                    if let id = engine.id(target) { store.openItemById(id) }
                 default: break
                 }
             }
@@ -1349,6 +1349,11 @@ private struct FeedView: View {
             } else if let heading = store.feedHeading {
                 HStack(spacing: 12) {
                     Text(heading).font(.title3.bold()).lineLimit(1)
+                    if store.feedMode == "playlist", Store.visionarySendablePlaylist(store.playlistId) {
+                        VisionarySendButton(kind: "playlist",
+                                            url: "https://www.youtube.com/playlist?list=\(store.playlistId)",
+                                            title: heading)
+                    }
                     Spacer()
                 }
                 .padding(.horizontal, 20).padding(.vertical, 12)
@@ -1422,7 +1427,7 @@ private struct FeedView: View {
                         if store.feedMode == "history" || store.feedMode == "playlist" {
                             // Per-position identity: these feeds may legitimately repeat a video.
                             ForEach(Array(shown.enumerated()), id: \.offset) { idx, v in
-                                Button { store.openWatch(v.id) } label: {
+                                Button { store.openItem(v) } label: {
                                     VideoCard(video: v, focusTarget: FocusTarget(.grid, idx))
                                 }
                                     .buttonStyle(CardPress())
@@ -1435,7 +1440,7 @@ private struct FeedView: View {
                             // Stable video-id identity: chip switches / search swaps must NOT
                             // recycle a card's @State + image onto a different video.
                             ForEach(Array(shown.enumerated()), id: \.element.id) { idx, v in
-                                Button { store.openWatch(v.id) } label: {
+                                Button { store.openItem(v) } label: {
                                     VideoCard(video: v, focusTarget: FocusTarget(.grid, idx))
                                 }
                                     .buttonStyle(CardPress())
@@ -1460,7 +1465,7 @@ private struct FeedView: View {
             // Keyboard navigation: publish what's on screen so the engine can do its index
             // arithmetic, and scroll the focused card in (the grid is lazy, so focus can move to a
             // row that isn't materialised yet).
-            .onAppear { publishFocusGeometry() }
+            .onAppear { publishFocusGeometry(); VisionaryBridge.shared.refreshAvailability() }
             .onChange(of: shown.count) { _, _ in publishFocusGeometry() }
             .onChange(of: gridW) { _, _ in publishFocusGeometry() }
             .onChange(of: focusEngine.scrollTick) { _, _ in
@@ -1494,6 +1499,17 @@ private struct FeedView: View {
             } else if let err = store.feedbackError {
                 Label(err, systemImage: "exclamationmark.triangle.fill")
                     .font(.system(size: 13)).foregroundStyle(.orange)
+                    .padding(.horizontal, 16).padding(.vertical, 11)
+                    .background(RoundedRectangle(cornerRadius: 10).fill(Color.primary.opacity(0.12)))
+                    .background(RoundedRectangle(cornerRadius: 10).fill(themeBackground(store.settings.theme)))
+                    .padding(.bottom, 24)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            } else if let note = store.visionaryNote {
+                // Result of a Visionary send fired from a card's 3-dot menu (the page-header
+                // buttons show theirs inline instead).
+                Label(note, systemImage: store.visionaryNoteIsError ? "exclamationmark.triangle.fill" : "checkmark")
+                    .font(.system(size: 13))
+                    .foregroundStyle(store.visionaryNoteIsError ? AnyShapeStyle(Color.orange) : AnyShapeStyle(Color.primary))
                     .padding(.horizontal, 16).padding(.vertical, 11)
                     .background(RoundedRectangle(cornerRadius: 10).fill(Color.primary.opacity(0.12)))
                     .background(RoundedRectangle(cornerRadius: 10).fill(themeBackground(store.settings.theme)))
@@ -1567,22 +1583,29 @@ private struct ChannelView: View {
                     }
                 }
                 .font(.system(size: 14)).foregroundStyle(.secondary)
-                Button { applySubscribe() } label: {
-                    Text(subscribed ? "Subscribed" : "Subscribe")
-                        .font(.system(size: 15, weight: .semibold))
-                        .padding(.horizontal, 18).frame(height: 40)
-                        .background(Capsule().fill(subscribed ? AnyShapeStyle(Color.primary.opacity(0.1)) : AnyShapeStyle(Color.primary)))
-                        .foregroundStyle(subscribed ? AnyShapeStyle(Color.primary) : AnyShapeStyle(themeBackground(store.settings.theme)))
-                        .contentShape(Capsule())
+                HStack(spacing: 10) {
+                    Button { applySubscribe() } label: {
+                        Text(subscribed ? "Subscribed" : "Subscribe")
+                            .font(.system(size: 15, weight: .semibold))
+                            .padding(.horizontal, 18).frame(height: 40)
+                            .background(Capsule().fill(subscribed ? AnyShapeStyle(Color.primary.opacity(0.1)) : AnyShapeStyle(Color.primary)))
+                            .foregroundStyle(subscribed ? AnyShapeStyle(Color.primary) : AnyShapeStyle(themeBackground(store.settings.theme)))
+                            .contentShape(Capsule())
+                    }
+                    .buttonStyle(.plain).clickable()
+                    .disabled((store.channelInfo?.channelId ?? "").isEmpty)
+                    if let cid = store.channelInfo?.channelId, !cid.isEmpty {
+                        VisionarySendButton(kind: "channel",
+                                            url: "https://www.youtube.com/channel/\(cid)",
+                                            title: store.channelInfo?.name ?? "")
+                    }
                 }
-                .buttonStyle(.plain).clickable()
-                .disabled((store.channelInfo?.channelId ?? "").isEmpty)
                 .padding(.top, 2)
             }
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 24).padding(.top, 28).padding(.bottom, 16)
-        .onAppear { seedSubscribed() }
+        .onAppear { seedSubscribed(); VisionaryBridge.shared.refreshAvailability() }
         .onChange(of: store.channelInfo?.channelId) { _, _ in seedSubscribed() }
     }
 
@@ -1874,6 +1897,44 @@ private struct AdCard: View {
 /// YouTube doesn't actually support for that card — and the wording always matches YouTube's.
 /// Feeds differ: home offers "Not interested" + "Don't recommend channel", subscriptions offer
 /// "Hide", history offers "Remove from watch history", and search offers none at all.
+/// "Send to Visionary" for a playlist or channel page. Appears ONLY when Visionary's engine is
+/// running here and its /api/state advertises the matching send capability — an engine that can't
+/// receive collections never shows the button at all (hide inert UI, don't disable it).
+private struct VisionarySendButton: View {
+    @ObservedObject private var visionary = VisionaryBridge.shared
+    let kind: String       // "playlist" | "channel" — must match a send_capabilities entry
+    let url: String
+    let title: String
+    @State private var sending = false
+    @State private var result: VisionaryBridge.SendResult?
+
+    var body: some View {
+        if visionary.canSend(kind) {
+            Button {
+                guard !sending else { return }
+                sending = true; result = nil
+                Task {
+                    let r = await visionary.send(url: url, title: title)
+                    sending = false
+                    withAnimation(.easeOut(duration: 0.15)) { result = r }
+                    try? await Task.sleep(nanoseconds: 3_000_000_000)
+                    withAnimation(.easeOut(duration: 0.2)) { result = nil }
+                }
+            } label: {
+                Label(sending ? "Sending…" : (result?.label ?? "Send to Visionary"),
+                      systemImage: result?.symbol ?? "arrow.up.square")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(result?.isError == true ? AnyShapeStyle(Color.orange) : AnyShapeStyle(Color.primary))
+                    .padding(.horizontal, 14).frame(height: 36)
+                    .background(Capsule().fill(Color.primary.opacity(0.1)))
+                    .contentShape(Capsule())
+            }
+            .buttonStyle(.plain).clickable()
+            .disabled(sending)
+        }
+    }
+}
+
 private struct VideoCardMenu: View {
     @EnvironmentObject var store: Store
     let video: VideoListItem
@@ -1888,13 +1949,19 @@ private struct VideoCardMenu: View {
             }
             if !video.feedback.isEmpty { Divider().opacity(0.25) }
             row("Copy link", "link") {
-                store.copyToPasteboard("https://www.youtube.com/watch?v=\(video.id)")
+                store.copyToPasteboard(video.webURL)
+            }
+            if let pid = video.playlistId, VisionaryBridge.shared.canSend("playlist") {
+                row("Send to Visionary", "arrow.up.square") {
+                    store.sendToVisionary(url: "https://www.youtube.com/playlist?list=\(pid)",
+                                          title: video.originalTitle)
+                }
             }
             if let cid = video.channelId, !cid.isEmpty {
                 row("Go to channel", "person.crop.circle") { store.openChannel(cid) }
             }
             row("Open in YouTube", "arrow.up.forward.square") {
-                store.openURL("https://www.youtube.com/watch?v=\(video.id)")
+                store.openURL(video.webURL)
             }
         }
         .padding(6)
@@ -2085,6 +2152,16 @@ private struct VideoCard: View {
                     .background(Color.black.opacity(0.8)).foregroundColor(.white)
                     .clipShape(RoundedRectangle(cornerRadius: 4))
                     .padding(8)
+            } else if let c = video.videoCountText {
+                // Playlist result: YouTube's own count badge where a video shows its duration.
+                HStack(spacing: 4) {
+                    Image(systemName: "rectangle.stack.fill").font(.system(size: 9))
+                    Text(c).font(.system(size: 12, weight: .semibold))
+                }
+                .padding(.horizontal, 5).padding(.vertical, 2)
+                .background(Color.black.opacity(0.8)).foregroundColor(.white)
+                .clipShape(RoundedRectangle(cornerRadius: 4))
+                .padding(8)
             }
         }
         // Keyboard focus reuses this exact hover stroke, just in the accent the focused search
@@ -2095,6 +2172,7 @@ private struct VideoCard: View {
     }
 
     private var metaLine: String {
+        if video.playlistId != nil { return "Playlist" }   // never pseudoMeta: fake views on a playlist
         let parts = [video.viewCountText, video.publishedText].compactMap { $0 }.filter { !$0.isEmpty }
         return parts.isEmpty ? pseudoMeta(video.id) : parts.joined(separator: " · ")
     }

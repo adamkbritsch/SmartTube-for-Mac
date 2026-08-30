@@ -16,6 +16,13 @@ final class VisionaryBridge: ObservableObject {
 
     /// Whether Visionary's engine answered recently. Drives button visibility.
     @Published private(set) var available = false
+    /// What its send endpoint can receive, advertised in /api/state as
+    /// `youtube.send_capabilities` (e.g. ["video","playlist","channel"]). An engine that predates
+    /// the field can only take single videos, so that's the assumed floor — playlist/channel
+    /// buttons stay hidden against it and light up when Visionary ships the capability.
+    @Published private(set) var capabilities: Set<String> = ["video"]
+    /// The per-kind visibility gate: Visionary is up AND says it can receive this kind.
+    func canSend(_ kind: String) -> Bool { available && capabilities.contains(kind) }
     private var checkedAt = Date.distantPast
     private let ttl: TimeInterval = 60
     private var probe: Task<Void, Never>?
@@ -52,7 +59,10 @@ final class VisionaryBridge: ObservableObject {
     /// not a filesystem/bundle check: the engine can run without its GUI app being frontmost, so
     /// probing for a running application would hide the button in a perfectly working setup.
     private struct EngineState: Decodable {
-        struct YouTube: Decodable { let connected: Bool }
+        struct YouTube: Decodable {
+            let connected: Bool
+            let send_capabilities: [String]?   // absent on older engines → ["video"]
+        }
         let youtube: YouTube          // the YouTube pipeline (its downloader link)
         let automation_enabled: Bool  // present on every Visionary state; part of the identity check
         let status: String
@@ -74,11 +84,13 @@ final class VisionaryBridge: ObservableObject {
             req.timeoutInterval = 2
             req.httpMethod = "GET"
             var up = false
+            var caps: Set<String> = ["video"]
             var why = "not running"
             if let (data, resp) = try? await URLSession.shared.data(for: req),
                let http = resp as? HTTPURLResponse, http.statusCode == 200 {
                 if let state = try? JSONDecoder().decode(EngineState.self, from: data) {
                     up = state.youtube.connected
+                    caps = Set(state.youtube.send_capabilities ?? ["video"])
                     why = up ? "ready" : "downloader offline — can't accept videos"
                 } else {
                     why = "something else is on :8765 (not Visionary)"
@@ -86,6 +98,7 @@ final class VisionaryBridge: ObservableObject {
             }
             self.checkedAt = Date()
             self.probe = nil
+            if self.capabilities != caps { self.capabilities = caps }
             if self.available != up {
                 self.available = up
                 print("[Visionary] \(up ? "available" : "hidden") — \(why)")
@@ -95,6 +108,12 @@ final class VisionaryBridge: ObservableObject {
 
     /// Hand one video to Visionary's pipeline. Idempotent server-side, so a double click is safe.
     func send(videoId: String, title: String) async -> SendResult {
+        await send(url: "https://www.youtube.com/watch?v=\(videoId)", title: title)
+    }
+
+    /// The general form: the same endpoint also takes playlist and channel URLs on engines that
+    /// advertise those capabilities (gate the UI with `canSend` — an old engine answers `bad-url`).
+    func send(url: String, title: String) async -> SendResult {
         struct Body: Encodable { let url: String; let title: String }
         struct Reply: Decodable { let status: String; let id: String? }
 
@@ -102,8 +121,7 @@ final class VisionaryBridge: ObservableObject {
         req.httpMethod = "POST"
         req.timeoutInterval = 8
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try? JSONEncoder().encode(
-            Body(url: "https://www.youtube.com/watch?v=\(videoId)", title: title))
+        req.httpBody = try? JSONEncoder().encode(Body(url: url, title: title))
 
         guard let (data, resp) = try? await URLSession.shared.data(for: req),
               let http = resp as? HTTPURLResponse else {
