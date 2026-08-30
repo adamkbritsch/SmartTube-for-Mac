@@ -57,6 +57,7 @@ struct ContentView: View {
         ZStack {
             VStack(spacing: 0) {
                 HeaderBar(search: $search, sidebarCollapsed: $sidebarCollapsed, showSettings: $showSettings)
+                    .zIndex(2)   // the search dropdown hangs below the header, over the content
                 Divider().opacity(0.4)
                 ZStack {
                     // Browse layer stays mounted while watching so feed scroll/position survives a round-trip.
@@ -568,7 +569,7 @@ struct WatchPage: View {
 
             // Only shown while Visionary's local engine actually answers — no disabled ghost when
             // the app isn't running.
-            if visionary.available {
+            if visionary.canSend("video") {
                 Button { sendToVisionary() } label: {
                     Label(visionarySendLabel, systemImage: visionarySendSymbol)
                         .font(.system(size: 13, weight: .medium))
@@ -954,6 +955,9 @@ private struct HeaderBar: View {
     @State private var showNotifications = false
     @State private var showAccountMenu = false
     @FocusState private var searchFocused: Bool
+    @State private var suggestions: [String] = []          // YouTube's predictions for the typed text
+    @State private var suggestTask: Task<Void, Never>?
+    @State private var highlighted: Int?                   // arrow-key selection in the dropdown
 
     var body: some View {
         HStack(spacing: 16) {
@@ -1055,18 +1059,7 @@ private struct HeaderBar: View {
 
     private var searchField: some View {
         HStack(spacing: 8) {
-            TextField("Search", text: $search)
-                .onChange(of: store.focusSearchTick) { _, _ in searchFocused = true }
-                .onChange(of: searchFocused) { _, on in
-                    // Hand the Plex key map the one fact it can't infer: the keyboard is being used
-                    // to TYPE, not to drive the UI.
-                    FocusEngine.shared.textEntry = on
-                    FocusEngine.shared.blurText = { searchFocused = false }
-                }
-                .textFieldStyle(.plain)
-                .font(.system(size: 14))
-                .focused($searchFocused)
-                .onSubmit { store.search(search) }
+            searchTextField
             if !search.isEmpty {
                 Button { search = ""; store.clearSearch() } label: { Image(systemName: "xmark.circle.fill") }
                     .buttonStyle(.plain).foregroundStyle(.secondary).clickable()
@@ -1083,8 +1076,140 @@ private struct HeaderBar: View {
             searchFocused ? Color(red: 0.24, green: 0.65, blue: 1) : Color.primary.opacity(0.12),
             lineWidth: searchFocused ? 2 : 1))
         .animation(.easeOut(duration: 0.15), value: searchFocused)
+        // The suggestions dropdown hangs below the capsule. It renders past the header's bounds, so
+        // HeaderBar carries a zIndex in the root VStack — later siblings would otherwise draw AND
+        // hit-test over it.
+        .overlay(alignment: .topLeading) {
+            if searchFocused, !suggestionRows.isEmpty {
+                suggestionsDropdown.offset(y: 44)
+            }
+        }
     }
 
+    /// Split from searchField: the combined modifier chain blew the type-checker's budget.
+    private var searchTextField: some View {
+        TextField("Search", text: $search)
+                .onChange(of: store.focusSearchTick) { _, _ in searchFocused = true }
+                .onChange(of: searchFocused) { _, on in
+                    // Hand the Plex key map the one fact it can't infer: the keyboard is being used
+                    // to TYPE, not to drive the UI.
+                    FocusEngine.shared.textEntry = on
+                    FocusEngine.shared.blurText = { searchFocused = false }
+                }
+                .textFieldStyle(.plain)
+                .font(.system(size: 14))
+                .focused($searchFocused)
+                .onSubmit {
+                    if let h = highlighted, suggestionRows.indices.contains(h) { pick(suggestionRows[h].text) }
+                    else { pick(search) }
+                }
+                // Arrow keys select in the dropdown while it's open (onKeyPress runs on the FOCUSED
+                // view, so this works exactly while typing — the app-level monitor passes keys
+                // through during text entry). .handled stops the caret from moving.
+                .onKeyPress(.downArrow) {
+                    guard searchFocused, !suggestionRows.isEmpty else { return .ignored }
+                    highlighted = ((highlighted ?? -1) + 1) % suggestionRows.count
+                    return .handled
+                }
+                .onKeyPress(.upArrow) {
+                    guard searchFocused, !suggestionRows.isEmpty else { return .ignored }
+                    highlighted = ((highlighted ?? suggestionRows.count) - 1 + suggestionRows.count) % suggestionRows.count
+                    return .handled
+                }
+                .onChange(of: search) { _, q in
+                    highlighted = nil
+                    suggestTask?.cancel()
+                    let t = q.trimmingCharacters(in: .whitespaces)
+                    guard !t.isEmpty else { suggestions = []; return }
+                    // Debounce so a fast typist fires one request, not one per keystroke.
+                    suggestTask = Task {
+                        try? await Task.sleep(nanoseconds: 180_000_000)
+                        guard !Task.isCancelled else { return }
+                        let list = await store.fetchSuggestions(t)
+                        if !Task.isCancelled, search.trimmingCharacters(in: .whitespaces) == t {
+                            suggestions = list
+                        }
+                    }
+                }
+    }
+
+    /// What the dropdown shows. Empty field → recent searches. Typing → recents that match the
+    /// prefix first (clock icon, like YouTube), then YouTube's own predictions, deduplicated.
+    private var suggestionRows: [(text: String, recent: Bool)] {
+        let q = search.trimmingCharacters(in: .whitespaces)
+        if q.isEmpty { return store.recentSearches.prefix(8).map { ($0, true) } }
+        let rec = store.recentSearches
+            .filter { $0.lowercased().hasPrefix(q.lowercased()) }
+            .prefix(3).map { ($0, true) }
+        let seen = Set(rec.map { $0.0.lowercased() })
+        let yt = suggestions
+            .filter { !seen.contains($0.lowercased()) }
+            .prefix(10 - rec.count).map { ($0, false) }
+        return Array(rec) + Array(yt)
+    }
+
+    private func pick(_ term: String) {
+        let t = term.trimmingCharacters(in: .whitespaces)
+        guard !t.isEmpty else { return }
+        suggestTask?.cancel()
+        search = t
+        suggestions = []; highlighted = nil
+        searchFocused = false
+        store.search(t)
+    }
+
+    private var suggestionsDropdown: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(suggestionRows.enumerated()), id: \.offset) { idx, row in
+                SuggestionRow(text: row.text, recent: row.recent,
+                              highlighted: highlighted == idx,
+                              pick: { pick(row.text) },
+                              remove: row.recent ? { store.removeRecentSearch(row.text) } : nil)
+            }
+        }
+        .padding(.vertical, 6)
+        .frame(maxWidth: 520, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 12).fill(Color.primary.opacity(0.06)))
+        .background(RoundedRectangle(cornerRadius: 12).fill(themeBackground(store.settings.theme)))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.primary.opacity(0.12), lineWidth: 1))
+        .shadow(color: .black.opacity(0.45), radius: 18, y: 8)
+    }
+
+}
+
+/// One dropdown row: clock = a saved recent search (removable), magnifier = YouTube's prediction.
+private struct SuggestionRow: View {
+    let text: String
+    let recent: Bool
+    let highlighted: Bool
+    let pick: () -> Void
+    var remove: (() -> Void)?
+    @State private var hover = false
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: recent ? "clock" : "magnifyingglass")
+                .font(.system(size: 12)).foregroundStyle(.secondary).frame(width: 16)
+            Text(text).font(.system(size: 13)).lineLimit(1)
+            Spacer(minLength: 0)
+            if recent, hover, let remove {
+                Button(action: remove) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary)
+                        .frame(width: 18, height: 18).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain).clickable().help("Remove from history")
+            }
+        }
+        .padding(.horizontal, 12).padding(.vertical, 7)
+        .background(RoundedRectangle(cornerRadius: 8)
+            .fill(Color.primary.opacity(highlighted || hover ? 0.10 : 0)))
+        .padding(.horizontal, 6)
+        .contentShape(Rectangle())
+        .onTapGesture(perform: pick)
+        .onHover { hover = $0 }
+        .clickable()
+    }
 }
 
 // MARK: - Sidebar
@@ -1937,6 +2062,7 @@ private struct VisionarySendButton: View {
 
 private struct VideoCardMenu: View {
     @EnvironmentObject var store: Store
+    @ObservedObject private var visionary = VisionaryBridge.shared
     let video: VideoListItem
     let dismiss: () -> Void
 
@@ -1951,7 +2077,7 @@ private struct VideoCardMenu: View {
             row("Copy link", "link") {
                 store.copyToPasteboard(video.webURL)
             }
-            if let pid = video.playlistId, VisionaryBridge.shared.canSend("playlist") {
+            if let pid = video.playlistId, visionary.canSend("playlist") {
                 row("Send to Visionary", "arrow.up.square") {
                     store.sendToVisionary(url: "https://www.youtube.com/playlist?list=\(pid)",
                                           title: video.originalTitle)

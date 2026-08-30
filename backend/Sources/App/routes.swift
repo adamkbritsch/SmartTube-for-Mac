@@ -23,6 +23,7 @@ func routes(_ app: Application) throws {
     api.post("feed", "more", use: VideosController.more)
     api.get("feed", "subscriptions", use: VideosController.subscriptionsFeed)
     api.get("feed", "history", use: VideosController.history)
+    api.get("search", "suggest", use: VideosController.searchSuggest)
     api.get("playlists", use: VideosController.playlists)
     api.get("playlist", ":id", use: VideosController.playlist)
     api.get("me", use: VideosController.me)

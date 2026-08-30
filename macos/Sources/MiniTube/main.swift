@@ -101,6 +101,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // runs without MT_SELFTEST set.
         if let q = ProcessInfo.processInfo.environment["MT_SELFTEST"], !q.isEmpty { runSearchSelfTest(q) }
         if let v = ProcessInfo.processInfo.environment["MT_FSTEST"], !v.isEmpty { runFullscreenSelfTest(v) }
+        // Dropdown probe: focus search and type WITHOUT submitting, so the suggestions dropdown
+        // stays open for a window capture.
+        if let q = ProcessInfo.processInfo.environment["MT_SUGTEST"], !q.isEmpty {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+                self.store.focusSearchTick += 1
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                    let codes: [Character: UInt16] = ["a":0,"s":1,"d":2,"f":3,"h":4,"g":5,"z":6,"x":7,"c":8,"v":9,
+                        "b":11,"q":12,"w":13,"e":14,"r":15,"y":16,"t":17,"o":31,"u":32,"i":34,"p":35,"l":37,"j":38,
+                        "k":40,"n":45,"m":46," ":49]
+                    // "-" = focus only (the recents view); anything else is typed as a partial query.
+                    if q != "-" {
+                        for ch in q.lowercased() {
+                            guard let kc = codes[ch] else { continue }
+                            if let ev = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+                                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: self.window.windowNumber,
+                                context: nil, characters: String(ch), charactersIgnoringModifiers: String(ch),
+                                isARepeat: false, keyCode: kc) { NSApp.sendEvent(ev) }
+                        }
+                    }
+                    print("[sug] typed \"\(q)\" — dropdown should be open")
+                }
+            }
+        }
+        // Visionary-button probe: open a channel page and report the bridge's gating state, so a
+        // window capture can show whether the capability-gated buttons actually rendered.
+        if let cid = ProcessInfo.processInfo.environment["MT_VISTEST"], !cid.isEmpty {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+                self.store.openChannel(cid)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 6) {
+                    let b = VisionaryBridge.shared
+                    print("[vis] available=\(b.available) capabilities=\(b.capabilities.sorted()) canChannel=\(b.canSend("channel")) canPlaylist=\(b.canSend("playlist"))")
+                }
+            }
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {

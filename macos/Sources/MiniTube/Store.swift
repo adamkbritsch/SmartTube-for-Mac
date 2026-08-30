@@ -556,9 +556,35 @@ final class Store: ObservableObject {
     }
 
     /// Search YouTube; results replace the feed until cleared.
+    // MARK: Search history + predictions
+
+    /// Recent submitted searches, newest first — the empty-field suggestions. Local only.
+    @Published var recentSearches: [String] = UserDefaults.standard.stringArray(forKey: "recentSearches") ?? []
+    private func recordRecentSearch(_ q: String) {
+        var list = recentSearches.filter { $0.caseInsensitiveCompare(q) != .orderedSame }
+        list.insert(q, at: 0)
+        if list.count > 15 { list.removeLast(list.count - 15) }
+        recentSearches = list
+        UserDefaults.standard.set(list, forKey: "recentSearches")
+    }
+    func removeRecentSearch(_ q: String) {
+        recentSearches.removeAll { $0 == q }
+        UserDefaults.standard.set(recentSearches, forKey: "recentSearches")
+    }
+
+    /// YouTube's predictive suggestions for a partial query, via the backend proxy.
+    func fetchSuggestions(_ q: String) async -> [String] {
+        let enc = q.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? q
+        guard let url = URL(string: "\(base)/api/search/suggest?q=\(enc)"),
+              let (data, _) = try? await URLSession.shared.data(from: url),
+              let arr = try? JSONDecoder().decode([String].self, from: data) else { return [] }
+        return arr
+    }
+
     func search(_ query: String) {
         let q = query.trimmingCharacters(in: .whitespaces)
         guard !q.isEmpty else { return }
+        recordRecentSearch(q)
         // Leave any other page + clear the previous feed's continuation so a scroll during
         // the fetch window can't POST a browse token to /api/search/more.
         channelId = nil; channelInfo = nil; playlists = nil; shortsFeed = nil; watchVideoId = nil; feedMode = "home"

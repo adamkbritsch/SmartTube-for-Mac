@@ -178,6 +178,21 @@ enum VideosController {
     }
 
     /// Next page of search results.
+    /// YouTube's own predictive-search suggestions for a partial query. Proxied because the
+    /// suggest host has no CORS and the app talks only to this backend. No auth involved.
+    static func searchSuggest(_ req: Request) async throws -> [String] {
+        guard let q = try? req.query.get(String.self, at: "q"),
+              !q.trimmingCharacters(in: .whitespaces).isEmpty else { return [] }
+        let enc = q.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? q
+        // client=firefox returns plain JSON: [query, [suggestion, …]] (client=youtube is JSONP).
+        let uri = URI(string: "https://suggestqueries-clients6.youtube.com/complete/search?client=firefox&ds=yt&hl=en&q=\(enc)")
+        guard let res = try? await req.client.get(uri), var body = res.body,
+              let data = body.readData(length: body.readableBytes) else { return [] }
+        guard let arr = try? JSONSerialization.jsonObject(with: data) as? [Any],
+              arr.count > 1, let list = arr[1] as? [String] else { return [] }
+        return Array(list.prefix(10))
+    }
+
     static func searchMore(_ req: Request) async throws -> FeedPageResponse {
         struct Body: Content { let continuation: String }
         let token = try req.content.decode(Body.self).continuation
