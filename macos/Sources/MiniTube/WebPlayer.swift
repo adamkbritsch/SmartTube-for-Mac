@@ -206,6 +206,12 @@ struct WebPlayer: NSViewRepresentable {
 
     func updateNSView(_ container: PlayerContainer, context: Context) {
         let webView = container.webView
+        // Refresh the host callbacks every update so they never go stale against the current video.
+        context.coordinator.onFullscreen = onFullscreen
+        context.coordinator.onEnhanceInfo = onEnhanceInfo
+        context.coordinator.onEnded = onEnded
+        context.coordinator.onTheater = onTheater
+        context.coordinator.onMarkWatched = onMarkWatched
         context.coordinator.load(videoId, into: webView)
         // Only act when the flags actually changed — updateNSView fires on every parent
         // re-render (incl. the player's own readouts), which used to re-eval JS in a loop.
@@ -242,11 +248,18 @@ struct WebPlayer: NSViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(onFullscreen: onFullscreen, onEnhanceInfo: onEnhanceInfo, onEnded: onEnded, onTheater: onTheater, onMarkWatched: onMarkWatched, adBlock: adBlock, sponsorBlock: sponsorBlock) }
 
     final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
-        private let onFullscreen: () -> Void
-        private let onEnhanceInfo: (Int, Double, Bool) -> Void
-        private let onEnded: () -> Void
-        private let onTheater: () -> Void
-        private let onMarkWatched: (String) -> Void
+        // VAR, and re-assigned from updateNSView. These used to be `let`, set once in
+        // makeCoordinator — which runs ONCE per representable identity. WatchPage is created
+        // without an .id(), so opening an up-next video reuses the same view AND the same
+        // Coordinator, leaving these closures capturing the FIRST video's WatchPage copy (whose
+        // `videoId` is a plain stored `let`). Autoplay therefore worked on the first video of a
+        // session and silently did nothing on every one after it: the captured videoId no longer
+        // matched store.watchInfo, so the page's recommendations read as empty.
+        var onFullscreen: () -> Void
+        var onEnhanceInfo: (Int, Double, Bool) -> Void
+        var onEnded: () -> Void
+        var onTheater: () -> Void
+        var onMarkWatched: (String) -> Void
         let adBlock: Bool
         let sponsorBlock: Bool
         var latestFlags = ""       // current window.__MT — re-pushed after each page load

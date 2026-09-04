@@ -123,7 +123,7 @@
           'onerror="this.onerror=null;this.src=\'' + MT.esc(v.originalThumbnail) + '\'" alt="">' +
         '<div><div class="rtitle">' + MT.esc(title) + '</div>' +
         '<div class="rsub">' + MT.esc(v.channel) + '</div>' +
-        '<div class="rsub">1.2M views</div></div>';
+        (v.viewCountText ? '<div class="rsub">' + MT.esc(v.viewCountText) + '</div>' : '') + '</div>';
       elRecs.appendChild(a);
     });
   }

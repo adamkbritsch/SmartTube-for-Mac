@@ -12,18 +12,21 @@
     const a = document.createElement("a");
     a.className = "card" + (useDA ? " dearrowed" : "");
     a.href = "/watch?v=" + encodeURIComponent(v.id);
+    const meta = [v.viewCountText, v.publishedText].filter(Boolean).join(" \u00b7 ");
     a.innerHTML =
       '<div class="thumb-wrap">' +
         '<img loading="lazy" src="' + MT.esc(thumb) + '" alt="" ' +
           'onerror="this.onerror=null;this.src=\'' + MT.esc(v.originalThumbnail) + '\'">' +
-        '<span class="da-badge">DeArrow</span>' +
+        (v.deArrowTitle ? '<span class="da-badge">DeArrow</span>' : '') +
       '</div>' +
       '<div class="meta">' +
         '<div class="ch-avatar"></div>' +
         '<div>' +
           '<p class="title">' + MT.esc(title) + '</p>' +
           '<div class="sub">' + MT.esc(v.channel) + '</div>' +
-          '<div class="sub">1.2M views &middot; 3 days ago</div>' +
+          // Real metadata from the API, or nothing. This was hardcoded "1.2M views · 3 days ago",
+          // so every card on this page claimed the same invented numbers.
+          (meta ? '<div class="sub">' + MT.esc(meta) + '</div>' : '') +
         '</div>' +
       '</div>';
     return a;

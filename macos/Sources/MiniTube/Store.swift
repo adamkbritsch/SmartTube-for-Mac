@@ -315,6 +315,7 @@ final class Store: ObservableObject {
             guard let url = URL(string: "\(base)/api/me"),
                   let (data, _) = try? await URLSession.shared.data(from: url),
                   let me = try? JSONDecoder().decode(Me.self, from: data) else { return }
+            myChannelId = me.channelId
             openChannel(me.channelId)
             guard let tabSlug else { return }
             pendingChannelTabSlug = tabSlug
@@ -373,8 +374,13 @@ final class Store: ObservableObject {
     /// The sidebar item that matches what's actually on screen (drives the highlight, so it
     /// stays correct no matter how navigation happened — logo, back, a card's channel tap, etc.).
     /// For a channel page it returns the channel id, so a subscription row highlights when open.
+    /// The id of the signed-in user's own channel, once known — so the sidebar's "You" can show as
+    /// selected while you're on your own channel. Without it that tile could never highlight,
+    /// because currentSection only ever returned a channel id there.
+    @Published var myChannelId: String?
+
     var currentSection: String {
-        if let cid = channelId { return cid }
+        if let cid = channelId { return cid == myChannelId ? "You" : cid }
         if shortsFeed != nil { return "Shorts" }
         if playlists != nil { return "Playlists" }
         if !searchQuery.isEmpty { return "search" }

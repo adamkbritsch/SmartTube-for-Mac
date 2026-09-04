@@ -222,9 +222,14 @@ struct WatchPage: View {
                   adPruneKeys: store.adRules.pruneKeys, adScrubKeys: store.adRules.scrubKeys,
                   onEnhanceInfo: { h, a, hdr in Task { @MainActor in store.reportEnhance(height: h, amount: a, hdr: hdr) } },
                   onEnded: {
-                      // Autoplay: the toggle in the up-next rail now actually does something.
+                      // Reads LIVE store state rather than `filteredRecs`, which goes through the
+                      // view's captured `videoId`. Belt-and-braces with the coordinator refresh in
+                      // WebPlayer.updateNSView: autoplay must not depend on when this closure was
+                      // captured.
                       Task { @MainActor in
-                          if autoplay, let next = filteredRecs.first { store.openWatch(next.id) }
+                          guard autoplay,
+                                let next = store.watchInfo?.recommendations.first else { return }
+                          store.openWatch(next.id)
                       }
                   },
                   onTheater: {
@@ -1294,7 +1299,10 @@ private struct SidebarView: View {
                 row("Shorts", "play.rectangle.fill")
                 row("Subscriptions", "play.square.stack.fill")
 
-                sectionHeader("Subscriptions", trailing: nil)
+                // Signed in this really is the subscription list; signed out it's just the
+                // distinct channels in the current feed, so it must not claim to be subscriptions.
+                sectionHeader(store.account.signedIn && !store.account.subscriptions.isEmpty
+                              ? "Subscriptions" : "Channels in your feed", trailing: nil)
                 if store.account.signedIn && !store.account.subscriptions.isEmpty {
                     let subs = store.account.subscriptions
                     let shown = subsExpanded ? subs : Array(subs.prefix(subsCollapsedLimit))

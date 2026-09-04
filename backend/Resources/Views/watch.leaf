@@ -54,7 +54,6 @@
           <div class="ch-avatar"></div>
           <div>
             <div class="name" id="v-channel">&nbsp;</div>
-            <div class="sub" style="font-size:12px;color:var(--muted)">1.2M subscribers</div>
           </div>
           <button class="subscribe">Subscribe</button>
         </div>
