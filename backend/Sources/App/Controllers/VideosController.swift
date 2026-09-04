@@ -8,10 +8,10 @@ struct VideoListItem: Content {
     let channel: String
     let originalTitle: String
     let originalThumbnail: String
-    let deArrowTitle: String?
-    let deArrowThumbnail: String?
-    let hasSponsorSegments: Bool   // real: SponsorBlock has segments for this video
-    let hasDeArrow: Bool           // real: DeArrow has a community title
+    var deArrowTitle: String?      // var: filled in by enrichedItems from the DeArrow cache
+    var deArrowThumbnail: String?
+    var hasSponsorSegments: Bool   // real: SponsorBlock has segments for this video
+    var hasDeArrow: Bool           // real: DeArrow has a community title
     let durationSeconds: Double?   // real: from SponsorBlock's videoDuration
     var viewCountText: String? = nil   // real (home feed): "1.2M views"
     var publishedText: String? = nil   // real (home feed): "3 days ago"
@@ -160,7 +160,7 @@ enum VideosController {
             Task { await req.auth.suspectCheck(client: client) }
             return FeedPageResponse(videos: [], continuation: nil, unavailable: "failed")
         }
-        return FeedPageResponse(videos: page.videos.map(listItem(from:)), continuation: page.continuation)
+        return FeedPageResponse(videos: await enrichedItems(page.videos, req), continuation: page.continuation)
     }
 
     /// The subscriptions feed: newest uploads from subscribed channels, chronological.
@@ -170,7 +170,7 @@ enum VideosController {
             return FeedPageResponse(videos: [], continuation: nil)
         }
         let page = await InnerTube.subscriptionsFeed(session: session, client: req.client)
-        return FeedPageResponse(videos: page.videos.map(listItem(from:)), continuation: page.continuation)
+        return FeedPageResponse(videos: await enrichedItems(page.videos, req), continuation: page.continuation)
     }
 
     /// Next page of the feed for continuous scroll.
@@ -178,7 +178,7 @@ enum VideosController {
         struct Body: Content { let continuation: String }
         let token = try req.content.decode(Body.self).continuation
         let page = await InnerTube.browseContinuation(token: token, session: await req.auth.sessionIfConnected(), client: req.client)
-        return FeedPageResponse(videos: page.videos.map(listItem(from:)), continuation: page.continuation)
+        return FeedPageResponse(videos: await enrichedItems(page.videos, req), continuation: page.continuation)
     }
 
     /// YouTube search results (page 1).
@@ -188,7 +188,7 @@ enum VideosController {
             return FeedPageResponse(videos: [], continuation: nil)
         }
         let page = await InnerTube.search(query: query, session: await req.auth.sessionIfConnected(), client: req.client)
-        return FeedPageResponse(videos: page.videos.map(listItem(from:)), continuation: page.continuation)
+        return FeedPageResponse(videos: await enrichedItems(page.videos, req), continuation: page.continuation)
     }
 
     /// Next page of search results.
@@ -211,7 +211,7 @@ enum VideosController {
         struct Body: Content { let continuation: String }
         let token = try req.content.decode(Body.self).continuation
         let page = await InnerTube.searchContinuation(token: token, session: await req.auth.sessionIfConnected(), client: req.client)
-        return FeedPageResponse(videos: page.videos.map(listItem(from:)), continuation: page.continuation)
+        return FeedPageResponse(videos: await enrichedItems(page.videos, req), continuation: page.continuation)
     }
 
     /// Full watch page: real title/channel/subs/views/description + recommendations.
@@ -226,7 +226,7 @@ enum VideosController {
             channelAvatar: m.channelAvatar, channelVerified: m.channelVerified,
             subscribers: m.subscribers, views: m.views, published: m.published,
             description: m.description, descriptionLinks: m.descriptionLinks, likes: m.likes,
-            recommendations: m.recommendations.map(listItem(from:)),
+            recommendations: await enrichedItems(m.recommendations, req),
             commentCount: m.commentCount, comments: m.comments,
             commentsContinuation: m.commentsContinuation,
             subscribed: m.subscribed, likeStatus: m.likeStatus
@@ -343,7 +343,7 @@ enum VideosController {
                 if ordered.count >= 48 { break outer }
             }
         }
-        return FeedPageResponse(videos: ordered.map(listItem(from:)), continuation: nil)
+        return FeedPageResponse(videos: await enrichedItems(ordered, req), continuation: nil)
     }
 
     /// Next page of comments (continuous scroll).
@@ -367,7 +367,7 @@ enum VideosController {
         return ChannelResponse(
             channelId: id, name: ch.name, handle: ch.handle,
             subscribers: ch.subscribers, avatar: ch.avatar,
-            videos: ch.videos.map(listItem(from:)), continuation: ch.continuation,
+            videos: await enrichedItems(ch.videos, req), continuation: ch.continuation,
             subscribed: ch.subscribed,
             tabs: ch.tabs.map { ChannelTabInfo(slug: $0.slug, title: $0.title, params: $0.params, selected: $0.selected) }
         )
@@ -379,7 +379,7 @@ enum VideosController {
             return FeedPageResponse(videos: [], continuation: nil)
         }
         let page = await InnerTube.browseFeed(browseId: "FEhistory", session: session, client: req.client)
-        return FeedPageResponse(videos: page.videos.map(listItem(from:)), continuation: page.continuation)
+        return FeedPageResponse(videos: await enrichedItems(page.videos, req), continuation: page.continuation)
     }
 
     /// The user's saved playlists (cards → tap opens playlist detail).
@@ -396,7 +396,7 @@ enum VideosController {
             return FeedPageResponse(videos: [], continuation: nil)
         }
         let page = await InnerTube.browseFeed(browseId: "VL" + id, session: session, client: req.client)
-        return FeedPageResponse(videos: page.videos.map(listItem(from:)), continuation: page.continuation)
+        return FeedPageResponse(videos: await enrichedItems(page.videos, req), continuation: page.continuation)
     }
 
     struct MeResponse: Content { let channelId: String }
@@ -420,6 +420,50 @@ enum VideosController {
     static func notifications(_ req: Request) async throws -> [InnerTube.NotificationItem] {
         guard let session = await req.auth.sessionIfConnected() else { return [] }
         return await InnerTube.notifications(session: session, client: req.client)
+    }
+
+    /// Enrich a page of feed items with DeArrow titles/thumbnails and SponsorBlock presence.
+    ///
+    /// listItem(from:) hardcodes `deArrowTitle: nil` and `hasSponsorSegments: false`, so on every
+    /// grid in the app store.title(for:) always returned the original: the DeArrow SETTING did
+    /// nothing outside the watch page, and the card's DeArrow and SponsorBlock indicators could
+    /// never appear. This reads the caches those very features already maintain — never blocking
+    /// on the network for a 30-item page — and warms the misses in the background so the next load
+    /// of the same videos is enriched.
+    static func enrichedItems(_ fvs: [InnerTube.FeedVideo], _ req: Request) async -> [VideoListItem] {
+        var out: [VideoListItem] = []
+        var cold: [String] = []
+        for fv in fvs {
+            var item = listItem(from: fv)
+            if let b = await req.state.cachedBranding(fv.id) {
+                item.deArrowTitle = b.title
+                item.deArrowThumbnail = b.thumbnail
+                item.hasDeArrow = b.title != nil
+            } else {
+                cold.append(fv.id)
+            }
+            if let segs = await req.state.cachedSegments(fv.id) { item.hasSponsorSegments = !segs.isEmpty }
+            out.append(item)
+        }
+        // Warm the misses AFTER responding. Bounded so one feed load can't fan out unboundedly
+        // against a community API, and sequential for the same reason.
+        if !cold.isEmpty {
+            let ids = Array(cold.prefix(30))
+            let client = req.client, logger = req.logger, state = req.state
+            Task.detached {
+                for id in ids {
+                    let b = await DeArrowClient.fetch(videoID: id, client: client, logger: logger)
+                    await state.storeBranding(b, id)
+                    // Same warm for SponsorBlock, so the card's sponsor indicator is real too and
+                    // not just for videos that happen to have been opened.
+                    if await state.cachedSegments(id) == nil {
+                        let segs = await SponsorBlockClient.fetch(videoID: id, client: client, logger: logger)
+                        await state.storeSegments(segs, id)
+                    }
+                }
+            }
+        }
+        return out
     }
 
     static func listItem(from fv: InnerTube.FeedVideo) -> VideoListItem {

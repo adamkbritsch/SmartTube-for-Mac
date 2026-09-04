@@ -172,7 +172,9 @@ struct WatchPage: View {
     @ObservedObject private var gpuSaver = GPUSaver.shared
     let videoId: String
     @State private var selectedChip = "All"
-    @State private var autoplay = true
+    /// Autoplay preference. Was per-WatchPage @State defaulting to true, so it silently reset to ON
+    /// for every video — switching it off only lasted until the next one.
+    @AppStorage("autoplayNext") private var autoplay = true
     @State private var descExpanded = false
     // Mini-player state: the reserved slot's live frame, plus the user's dragged offset.
     @State private var slotFrame: CGRect = .zero
@@ -1459,6 +1461,7 @@ private struct FeedView: View {
     }
 
     private static let topAnchor = "feedTop"
+    static let customFeedChip = "Your custom feed"
     @ObservedObject private var focusEngine = FocusEngine.shared
 
     /// Tell the focus engine how many cards are on screen and how wide a row is, so Up/Down move
@@ -1497,6 +1500,16 @@ private struct FeedView: View {
         if store.feedHeading != nil { return store.videos }   // subs/history/playlist, unfiltered
         if selectedChip == "HDR" { return store.hdrVideos }   // curated HDR + feed-personalized picks
         if selectedChip == "All" { return store.videos }
+        // "Your custom feed" is the slice from channels you actually subscribe to. It used to fall
+        // through to the channel-name filter below and match nothing, so picking the FIRST chip in
+        // the row emptied the grid. Falls back to the whole feed when there's no subscription list
+        // to filter by (signed out), so it can never be empty-by-construction again.
+        if selectedChip == Self.customFeedChip {
+            let subs = Set(store.account.subscriptions.map(\.channelId))
+            guard !subs.isEmpty else { return store.videos }
+            let mine = store.videos.filter { $0.channelId.map(subs.contains) ?? false }
+            return mine.isEmpty ? store.videos : mine
+        }
         return store.videos.filter { $0.channel == selectedChip }
     }
 
@@ -1525,7 +1538,7 @@ private struct FeedView: View {
             } else {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 12) {
-                        chip("Your custom feed", icon: "square.grid.2x2")
+                        chip(Self.customFeedChip, icon: "square.grid.2x2")
                         chip("All", icon: nil)
                         chip("HDR", icon: "sun.max.fill")
                         ForEach(channelChips, id: \.self) { chip($0, icon: nil) }
@@ -1695,7 +1708,7 @@ private struct FeedView: View {
     private var isHDRTab: Bool { selectedChip == "HDR" && !isSearch && store.feedHeading == nil }
 
     /// The chips in visual order — the same list the engine navigates.
-    private var chipItems: [String] { ["Your custom feed", "All", "HDR"] + channelChips }
+    private var chipItems: [String] { [Self.customFeedChip, "All", "HDR"] + channelChips }
 
     private func chip(_ label: String, icon: String?) -> some View {
         let active = selectedChip == label
