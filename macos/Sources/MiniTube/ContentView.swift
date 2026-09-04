@@ -231,7 +231,7 @@ struct WatchPage: View {
                   },
                   onMarkWatched: { vid in
                       // Watched past the threshold → log the view to YouTube history.
-                      Task { @MainActor in store.markWatched(vid) }
+                      Task { @MainActor in await store.markWatched(vid) }
                   })
             .background(Color.black)
             .clipShape(RoundedRectangle(cornerRadius: 12))
@@ -1629,12 +1629,12 @@ private struct FeedView: View {
                     .background(RoundedRectangle(cornerRadius: 10).fill(themeBackground(store.settings.theme)))
                     .padding(.bottom, 24)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
-            } else if let note = store.visionaryNote {
-                // Result of a Visionary send fired from a card's 3-dot menu (the page-header
-                // buttons show theirs inline instead).
-                Label(note, systemImage: store.visionaryNoteIsError ? "exclamationmark.triangle.fill" : "checkmark")
+            } else if let note = store.actionNote {
+                // Result of an action fired from a card's 3-dot menu — a Visionary send, or
+                // "Mark as watched" (the page-header buttons show theirs inline instead).
+                Label(note, systemImage: store.actionNoteIsError ? "exclamationmark.triangle.fill" : "checkmark")
                     .font(.system(size: 13))
-                    .foregroundStyle(store.visionaryNoteIsError ? AnyShapeStyle(Color.orange) : AnyShapeStyle(Color.primary))
+                    .foregroundStyle(store.actionNoteIsError ? AnyShapeStyle(Color.orange) : AnyShapeStyle(Color.primary))
                     .padding(.horizontal, 16).padding(.vertical, 11)
                     .background(RoundedRectangle(cornerRadius: 10).fill(Color.primary.opacity(0.12)))
                     .background(RoundedRectangle(cornerRadius: 10).fill(themeBackground(store.settings.theme)))
@@ -2095,6 +2095,11 @@ private struct VideoCardMenu: View {
             if !video.feedback.isEmpty { Divider().opacity(0.25) }
             row("Copy link", "link") {
                 store.copyToPasteboard(video.webURL)
+            }
+            // Hidden once it's been marked this session rather than shown inert — a row that
+            // does nothing when clicked is exactly the decorative UI this pass is removing.
+            if video.playlistId == nil, !store.isMarkedWatched(video.id) {
+                row("Mark as watched", "checkmark.circle") { store.markWatchedFromMenu(video) }
             }
             if let pid = video.playlistId, visionary.canSend("playlist") {
                 row("Send to Visionary", "arrow.up.square") {

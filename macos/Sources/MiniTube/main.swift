@@ -313,7 +313,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .toggleFullscreen:  player.toggleFullscreen(); return true
         case .toggleWatched:
             guard let id = store?.watchVideoId else { return false }
-            store?.markWatched(id); return true
+            Task { await store?.markWatched(id) }; return true
         case .cycleTab(let d):
             guard let cycle = engine.cycleTab else { return false }
             cycle(d); return true

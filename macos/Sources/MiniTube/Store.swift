@@ -702,14 +702,40 @@ final class Store: ObservableObject {
     /// once per video per session. Called by the WebPlayer once real playback passes the
     /// watched threshold; the backend fires YouTube's own videostats ping.
     private var markedWatched = Set<String>()
-    func markWatched(_ videoId: String) {
+    /// Log a video to YouTube's watch history. Returns whether YouTube actually accepted it.
+    ///
+    /// The result used to be discarded (`_ = try? await …`) while the id stayed in `markedWatched`
+    /// forever — so a failed write was indistinguishable from a successful one AND could never be
+    /// retried. Now a failure releases the id so a later attempt can go through.
+    @discardableResult
+    func markWatched(_ videoId: String) async -> Bool {
         guard !videoId.isEmpty, markedWatched.insert(videoId).inserted,
-              let url = URL(string: "\(base)/api/markWatched") else { return }
+              let url = URL(string: "\(base)/api/markWatched") else { return false }
+        var req = URLRequest(url: url); req.httpMethod = "POST"; req.timeoutInterval = 20
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONEncoder().encode(["videoId": videoId])
+        guard let (data, _) = try? await URLSession.shared.data(for: req),
+              let res = try? JSONDecoder().decode(ActionResult.self, from: data), res.ok else {
+            markedWatched.remove(videoId)   // let a retry through
+            return false
+        }
+        return true
+    }
+
+    /// Whether this video has already been logged to history in this session — drives the menu row.
+    func isMarkedWatched(_ videoId: String) -> Bool { markedWatched.contains(videoId) }
+
+    /// The 3-dot menu's "Mark as watched": same write, but it reports what happened. A silent
+    /// history write the user asked for explicitly would be indistinguishable from a no-op.
+    func markWatchedFromMenu(_ v: VideoListItem) {
         Task {
-            var req = URLRequest(url: url); req.httpMethod = "POST"; req.timeoutInterval = 20
-            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            req.httpBody = try? JSONEncoder().encode(["videoId": videoId])
-            _ = try? await URLSession.shared.data(for: req)
+            let ok = await markWatched(v.id)
+            withAnimation {
+                actionNote = ok ? "Marked as watched" : "Couldn't mark as watched"
+                actionNoteIsError = !ok
+            }
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            withAnimation { actionNote = nil }
         }
     }
 
@@ -801,16 +827,17 @@ final class Store: ObservableObject {
     @Published var feedbackUndo: FeedbackUndo?
     @Published var feedbackError: String?
 
-    /// Transient result of a Visionary send fired from a card menu or page header (the watch page's
-    /// button shows its result inline instead). Auto-clears; orange when it's a failure.
-    @Published var visionaryNote: String?
-    @Published var visionaryNoteIsError = false
+    /// Transient result of an action fired from a card's 3-dot menu (a Visionary send, "Mark as
+    /// watched") — page-header buttons show their result inline instead. Auto-clears; orange on
+    /// failure. Shared, so an action that writes to the user's account always says what happened.
+    @Published var actionNote: String?
+    @Published var actionNoteIsError = false
     func sendToVisionary(url: String, title: String) {
         Task {
             let r = await VisionaryBridge.shared.send(url: url, title: title)
-            withAnimation { visionaryNote = r.label; visionaryNoteIsError = r.isError }
+            withAnimation { actionNote = r.label; actionNoteIsError = r.isError }
             try? await Task.sleep(nanoseconds: 3_000_000_000)
-            withAnimation { visionaryNote = nil }
+            withAnimation { actionNote = nil }
         }
     }
     /// Playlists Visionary's downloader can actually fetch: public list ids. WL/LL are private to
