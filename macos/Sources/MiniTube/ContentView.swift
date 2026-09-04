@@ -150,10 +150,21 @@ private struct PlaybackReadout: View {
                     .foregroundStyle(.white)
                     .help("This video is playing in real HDR (native, via macOS EDR)")
             }
+            // Whether the sharpen is ACTUALLY applied right now. The player reports this every
+            // second and nothing displayed it — Settings only shows which preset is chosen, so a
+            // user who picked "Sharper" had no way to see that it had auto-disabled (it turns
+            // itself off at 4K, and while GPU saver is on because Visionary is rendering).
+            if playback.enhanceActive {
+                Text("ENHANCED").font(.system(size: 9, weight: .heavy))
+                    .padding(.horizontal, 6).frame(height: 18)
+                    .background(Capsule().fill(Color.primary.opacity(0.12)))
+                    .foregroundStyle(.secondary)
+                    .help("GPU detail-sharpen is being applied to this video")
+            }
         }
     }
 
-    // Decoded height only — Enhance state is no longer surfaced here (it lives in Settings).
+    // Decoded height only; the Enhance chip above reports whether the sharpen is live.
     private var resLabel: String {
         let h = playback.height
         guard h > 0 else { return "" }
@@ -2415,6 +2426,9 @@ struct CommentRow: View {
     @State private var likeState = 0
     @State private var seeded = false
     @State private var busy = false
+    @State private var repliesOpen = false
+    @State private var replies: [Comment] = []
+    @State private var loadingReplies = false
 
     /// The vote to send for a tap, given where we are now. YouTube ships a distinct token for each
     /// transition, including the two "undo" ones.
@@ -2475,8 +2489,32 @@ struct CommentRow: View {
                         Label(comment.likes.isEmpty ? "0" : comment.likes, systemImage: "hand.thumbsup")
                             .foregroundStyle(.secondary)
                     }
+                    // "N replies" was a plain label sitting exactly where YouTube puts its reply
+                    // expander, inside a row of working controls. It expands now — when YouTube
+                    // gave a token for it; otherwise it stays a label rather than a dead button.
                     if !comment.replies.isEmpty {
-                        Text("\(comment.replies) replies").foregroundStyle(.secondary)
+                        if comment.repliesToken.isEmpty {
+                            Text("\(comment.replies) replies").foregroundStyle(.secondary)
+                        } else {
+                            Button {
+                                repliesOpen.toggle()
+                                guard repliesOpen, replies.isEmpty, !loadingReplies else { return }
+                                loadingReplies = true
+                                Task {
+                                    replies = await store.loadReplies(token: comment.repliesToken)
+                                    loadingReplies = false
+                                }
+                            } label: {
+                                HStack(spacing: 4) {
+                                    Image(systemName: repliesOpen ? "chevron.down" : "chevron.right")
+                                        .font(.system(size: 9, weight: .semibold))
+                                    Text("\(comment.replies) replies")
+                                }
+                                .foregroundStyle(Color(red: 0.24, green: 0.65, blue: 1))
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain).clickable()
+                        }
                     }
                 }
                 .font(.system(size: 12))
@@ -2485,6 +2523,16 @@ struct CommentRow: View {
                     guard !seeded else { return }
                     seeded = true
                     likeState = comment.likeState
+                }
+                if repliesOpen {
+                    if loadingReplies && replies.isEmpty {
+                        ProgressView().controlSize(.small).padding(.top, 6)
+                    } else {
+                        VStack(alignment: .leading, spacing: 12) {
+                            ForEach(replies) { r in CommentRow(comment: r).environmentObject(store) }
+                        }
+                        .padding(.top, 10).padding(.leading, 8)
+                    }
                 }
             }
             Spacer(minLength: 0)

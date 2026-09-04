@@ -283,6 +283,7 @@ struct Comment: Codable, Equatable, Identifiable {
     var dislikeToken: String = ""
     var undislikeToken: String = ""
     var likeState: Int = 0          // -1 disliked, 0 neither, 1 liked — the REAL current vote
+    var repliesToken: String = ""   // loads this comment's replies; empty when it has none
     var id: String {
         if let c = commentId, !c.isEmpty { return c }
         return author + "|" + published + "|" + text.prefix(24)   // fallback for older payloads
@@ -304,6 +305,7 @@ struct Comment: Codable, Equatable, Identifiable {
         dislikeToken = (try? c.decode(String.self, forKey: .dislikeToken)) ?? ""
         undislikeToken = (try? c.decode(String.self, forKey: .undislikeToken)) ?? ""
         likeState = (try? c.decode(Int.self, forKey: .likeState)) ?? 0
+        repliesToken = (try? c.decode(String.self, forKey: .repliesToken)) ?? ""
     }
 }
 

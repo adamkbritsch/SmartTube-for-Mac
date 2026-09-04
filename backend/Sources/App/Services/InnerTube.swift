@@ -757,6 +757,9 @@ enum InnerTube {
         let replies: String
         /// Links this comment to its toolbar state entity (which holds the current vote).
         var toolbarStateKey: String = ""
+        /// Continuation that loads THIS comment's replies. Empty when it has none — the client
+        /// shows the reply count as a plain label in that case rather than a dead expander.
+        var repliesToken: String = ""
         /// Vote tokens for THIS comment, straight from YouTube's own payload. Empty when the user
         /// is signed out or YouTube offered none — the client hides the buttons rather than
         /// showing controls that cannot work.
@@ -975,8 +978,10 @@ enum InnerTube {
         // engagementToolbarStateEntityPayload. Both are keyed by opaque base64 entity keys, but
         // every one of those keys embeds the plain comment id, so they can be joined on it.
         let (tokens, states) = commentToolbars(json)
+        let replyTokens = commentReplyTokens(json)
         out = out.map { c in
             var c = c
+            c.repliesToken = replyTokens[c.commentId] ?? ""
             if let t = tokens[c.commentId] {
                 c.likeToken = t.like; c.unlikeToken = t.unlike
                 c.dislikeToken = t.dislike; c.undislikeToken = t.undislike
@@ -985,6 +990,30 @@ enum InnerTube {
             return c
         }
         return (count, out, commentsPageToken(json))
+    }
+
+    /// commentId → the continuation that loads that comment's replies.
+    ///
+    /// commentThreadRenderer carries both halves directly: the comment's own id under
+    /// commentViewModel.commentViewModel.commentId, and the reply continuation under `replies`.
+    /// No entity-key decoding needed here, unlike the vote tokens.
+    private static func commentReplyTokens(_ node: Any) -> [String: String] {
+        var out: [String: String] = [:]
+        func walk(_ n: Any) {
+            if let d = n as? [String: Any] {
+                if let t = d["commentThreadRenderer"] as? [String: Any],
+                   let id = dig(t, "commentViewModel", "commentViewModel", "commentId") as? String,
+                   let replies = t["replies"],
+                   let token = firstValue("token", replies) as? String {
+                    out[id] = token
+                }
+                for v in d.values { walk(v) }
+            } else if let a = n as? [Any] {
+                for v in a { walk(v) }
+            }
+        }
+        walk(node)
+        return out
     }
 
     private struct CommentTokens { var like = ""; var unlike = ""; var dislike = ""; var undislike = "" }

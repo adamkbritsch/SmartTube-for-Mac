@@ -743,6 +743,20 @@ final class Store: ObservableObject {
         return true
     }
 
+    private struct RepliesPage: Codable { let comments: [Comment]; let continuation: String? }
+
+    /// Load one comment's replies. Same endpoint as the comments pager — a reply thread is just
+    /// another continuation — so this needs no new backend route.
+    func loadReplies(token: String) async -> [Comment] {
+        guard !token.isEmpty, let url = URL(string: "\(base)/api/comments/more") else { return [] }
+        var req = URLRequest(url: url); req.httpMethod = "POST"; req.timeoutInterval = 25
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONEncoder().encode(["continuation": token])
+        guard let (data, _) = try? await URLSession.shared.data(for: req),
+              let page = try? JSONDecoder().decode(RepliesPage.self, from: data) else { return [] }
+        return page.comments
+    }
+
     /// Cast or clear a vote on a comment. The token comes from YouTube's own comment payload, so
     /// only actions YouTube offered can be performed. Returns whether it stuck, so the caller can
     /// revert its optimistic flip instead of showing a vote that never landed.
