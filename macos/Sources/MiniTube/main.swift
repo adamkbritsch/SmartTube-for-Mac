@@ -132,6 +132,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 6) {
                     let b = VisionaryBridge.shared
                     print("[vis] available=\(b.available) capabilities=\(b.capabilities.sorted()) canChannel=\(b.canSend("channel")) canPlaylist=\(b.canSend("playlist"))")
+                    let tabs = self.store.channelInfo?.tabs ?? []
+                    print("[tabs] \(tabs.map(\.title))")
+                    // Switch to the tab named by MT_TAB (default Playlists) and report what loaded.
+                    let want = ProcessInfo.processInfo.environment["MT_TAB"] ?? "Playlists"
+                    guard let t = tabs.first(where: { $0.title == want }) else { print("[tabs] no \(want) tab"); return }
+                    self.store.openChannelTab(t)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 6) {
+                        let v = self.store.videos
+                        print("[tabs] after switching to \(want): \(v.count) items, playlists=\(v.filter { $0.playlistId != nil }.count), shorts=\(v.filter(\.isShort).count)")
+                    }
                 }
             }
         }

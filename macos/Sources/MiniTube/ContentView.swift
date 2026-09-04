@@ -1760,35 +1760,54 @@ private struct ChannelView: View {
         }
     }
 
-    private var tabBar: some View {
-        HStack(spacing: 28) {
-            tab("Videos", active: true)
-            tab("Playlists", active: false)
-            tab("About", active: false)
-            Spacer(minLength: 0)
+    /// The channel's REAL tabs, from YouTube. This used to be three hardcoded labels — "Videos",
+    /// "Playlists", "About" — drawn with a fixed `active:` flag and no button, so clicking them did
+    /// nothing and the view was stuck on Videos. Now each tab is the one YouTube offers for THIS
+    /// channel (a channel with no Shorts gets no Shorts tab) and carries its own browse params.
+    /// "About" is gone because modern YouTube has no About tab — it's a dialog, not a tab.
+    @ViewBuilder private var tabBar: some View {
+        if let tabs = store.channelInfo?.tabs, !tabs.isEmpty {
+            HStack(spacing: 28) {
+                ForEach(tabs) { t in
+                    tab(t.title, active: isActive(t)) { store.openChannelTab(t) }
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 24)
         }
-        .padding(.horizontal, 24)
     }
 
-    private func tab(_ label: String, active: Bool) -> some View {
-        VStack(spacing: 8) {
-            Text(label).font(.system(size: 15, weight: active ? .semibold : .regular))
-                .foregroundStyle(active ? AnyShapeStyle(Color.primary) : AnyShapeStyle(Color.secondary))
-            Rectangle().fill(active ? Color.primary : Color.clear).frame(height: 2)
+    /// Selected = the tab the user picked, or — before any pick — whichever YouTube marked selected.
+    private func isActive(_ t: ChannelTabInfo) -> Bool {
+        if let cur = store.channelTabParams { return cur == t.params }
+        return t.selected
+    }
+
+    private func tab(_ label: String, active: Bool, _ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 8) {
+                Text(label).font(.system(size: 15, weight: active ? .semibold : .regular))
+                    .foregroundStyle(active ? AnyShapeStyle(Color.primary) : AnyShapeStyle(Color.secondary))
+                Rectangle().fill(active ? Color.primary : Color.clear).frame(height: 2)
+            }
+            .fixedSize()
+            .contentShape(Rectangle())
         }
-        .fixedSize()
+        .buttonStyle(.plain).clickable()
     }
 
     @ViewBuilder private var grid: some View {
-        if store.channelInfo == nil {
+        if store.channelInfo == nil || store.channelTabLoading {
             SkeletonVideoGrid()
         } else if store.videos.isEmpty {
-            Text("No videos").foregroundStyle(.secondary).frame(maxWidth: .infinity).padding(.vertical, 80)
+            Text("Nothing here").foregroundStyle(.secondary).frame(maxWidth: .infinity).padding(.vertical, 80)
         } else {
             LazyVGrid(columns: Grid3.videoColumns(for: gridW), spacing: 28) {
                 // Channel uploads are unique — stable id identity.
                 ForEach(store.videos) { v in
-                    Button { store.openWatch(v.id) } label: { VideoCard(video: v) }
+                    // openItem, not openWatch: the Playlists tab is playlists, which open a
+                    // playlist page rather than a watch page.
+                    Button { store.openItem(v) } label: { VideoCard(video: v) }
                         .buttonStyle(CardPress())
                         .onAppear { if v.id == store.videos.last?.id { Task { await store.loadMore() } } }
                 }
@@ -2143,12 +2162,12 @@ private struct VideoCard: View {
         VStack(alignment: .leading, spacing: 10) {
             thumbnail
             HStack(alignment: .top, spacing: 12) {
-                channelAvatar
+                if !video.channel.isEmpty { channelAvatar }
                 VStack(alignment: .leading, spacing: 3) {
                     Text(store.title(for: video))
                         .font(.system(size: 14, weight: .semibold)).lineLimit(2)
                         .fixedSize(horizontal: false, vertical: true)
-                    channelLine
+                    if !video.channel.isEmpty { channelLine }
                     Text(metaLine).font(.system(size: 12)).foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 0)
@@ -2298,7 +2317,10 @@ private struct VideoCard: View {
     }
 
     private var metaLine: String {
-        if video.playlistId != nil { return "Playlist" }   // never pseudoMeta: fake views on a playlist
+        if video.playlistId != nil {
+            // Never pseudoMeta here: fabricated view counts on a playlist would be a lie.
+            return video.publishedText ?? "Playlist"
+        }
         let parts = [video.viewCountText, video.publishedText].compactMap { $0 }.filter { !$0.isEmpty }
         return parts.isEmpty ? pseudoMeta(video.id) : parts.joined(separator: " · ")
     }

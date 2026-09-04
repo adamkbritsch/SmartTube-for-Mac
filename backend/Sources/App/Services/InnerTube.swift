@@ -101,6 +101,7 @@ enum InnerTube {
         var feedback: [FeedbackAction] = []   // overflow-menu actions; empty where YouTube offers none
         var playlistId: String? = nil        // set → this item IS a playlist (id == contentId)
         var videoCountText: String? = nil    // playlist badge, YouTube's own wording ("51 videos")
+        var isShort: Bool = false            // came from a shortsLockupViewModel (vertical, /shorts)
     }
 
     /// The signed animated-preview URL (`i.ytimg.com/an_webp/…mqdefault_6s.webp`) YouTube ships
@@ -214,6 +215,13 @@ enum InnerTube {
         return page(from: json)
     }
 
+    struct ChannelTab: Sendable {
+        let slug: String       // locale-independent: featured | videos | shorts | streams | playlists | podcasts
+        let title: String      // YouTube's own label, in the session's language
+        let params: String     // browse params that select this tab
+        let selected: Bool
+    }
+
     struct ChannelResult: Sendable {
         let name: String
         let handle: String
@@ -222,12 +230,52 @@ enum InnerTube {
         let videos: [FeedVideo]
         let continuation: String?
         let subscribed: Bool
+        let tabs: [ChannelTab]
     }
 
-    static func channel(channelId: String, session: FirefoxSession.Session?, client: Client) async -> ChannelResult? {
+    /// Tabs whose contents this app can actually render in a card grid. Posts/Store/Search return
+    /// nothing a grid can show, and Shows came back empty on every channel probed — offering them
+    /// would just be a tab that lands on "No videos".
+    private static let renderableTabSlugs = ["featured", "videos", "shorts", "streams", "playlists", "podcast"]
+
+    /// The tab's stable slug, read out of its own browse params rather than its title: the params
+    /// are protobuf whose first field is the tab name as plain text ("videos", "playlists", …), so
+    /// this keeps working whatever language YouTube answers in.
+    private static func tabSlug(fromParams params: String) -> String? {
+        let unescaped = params.removingPercentEncoding ?? params
+        var padded = unescaped
+        while padded.count % 4 != 0 { padded += "=" }
+        guard let data = Data(base64Encoded: padded) else { return nil }
+        let bytes = [UInt8](data)
+        // field 1 (0x12 = tag 2, length-delimited) → length → ASCII name
+        guard bytes.count > 2, bytes[0] == 0x12 else { return nil }
+        let len = Int(bytes[1])
+        guard len > 0, bytes.count >= 2 + len else { return nil }
+        let name = String(decoding: bytes[2..<(2 + len)], as: UTF8.self)
+        return name.allSatisfy { $0.isLetter } ? name : nil
+    }
+
+    private static func channelTabs(_ json: Any) -> [ChannelTab] {
+        guard let tabs = dig(json, "contents", "twoColumnBrowseResultsRenderer", "tabs") as? [[String: Any]] else { return [] }
+        var out: [ChannelTab] = []
+        for t in tabs {
+            guard let r = (t["tabRenderer"] ?? t["expandableTabRenderer"]) as? [String: Any],
+                  let title = r["title"] as? String,
+                  let params = dig(r, "endpoint", "browseEndpoint", "params") as? String,
+                  let slug = tabSlug(fromParams: params),
+                  renderableTabSlugs.contains(where: { slug.hasPrefix($0) }) else { continue }
+            out.append(ChannelTab(slug: slug, title: title,
+                                  params: params.removingPercentEncoding ?? params,
+                                  selected: (r["selected"] as? Bool) ?? false))
+        }
+        return out
+    }
+
+    static func channel(channelId: String, tabParams: String? = nil, session: FirefoxSession.Session?, client: Client) async -> ChannelResult? {
         var body = context()
         body["browseId"] = channelId
-        body["params"] = "EgZ2aWRlb3PyBgQKAjoA"   // "Videos" tab
+        // Default to the Videos tab, as before; a tab the user picked comes in as its own params.
+        body["params"] = tabParams ?? "EgZ2aWRlb3PyBgQKAjoA"
         guard let json = await call(path: "browse", body: body, session: session, client: client) else { return nil }
         let ph: Any = firstValue("pageHeaderViewModel", json) ?? [String: Any]()
         let titleNode: Any = firstValue("title", ph) ?? [String: Any]()
@@ -244,14 +292,17 @@ enum InnerTube {
         let avatarNode: Any = firstValue("avatar", ph) ?? [String: Any]()
         let avatar = ((firstValue("sources", avatarNode) as? [[String: Any]])?.last?["url"] as? String) ?? ""
 
-        let page = page(from: json)
+        // A channel tab can legitimately be a wall of playlists (Playlists/Podcasts) or Shorts, so
+        // both are parsed here — unlike the home feed, which stays videos-only.
+        let page = page(from: json, includePlaylists: true, includeShorts: true)
         return ChannelResult(
             name: name,
             handle: parts.first(where: { $0.hasPrefix("@") }) ?? "",
             subscribers: parts.first(where: { $0.lowercased().contains("subscriber") }) ?? "",
             avatar: avatar,
             videos: page.videos, continuation: page.continuation,
-            subscribed: subscribed(inSecondary: json)   // scoped to the header's subscribe button
+            subscribed: subscribed(inSecondary: json),  // scoped to the header's subscribe button
+            tabs: channelTabs(json)
         )
     }
 
@@ -353,10 +404,10 @@ enum InnerTube {
         return page(from: json, includePlaylists: true)
     }
 
-    private static func page(from json: Any, includePlaylists: Bool = false) -> FeedPage {
+    private static func page(from json: Any, includePlaylists: Bool = false, includeShorts: Bool = false) -> FeedPage {
         var acc: [String: FeedVideo] = [:]
         var order: [String] = []
-        walkVideos(json, into: &acc, order: &order, includePlaylists: includePlaylists)
+        walkVideos(json, into: &acc, order: &order, includePlaylists: includePlaylists, includeShorts: includeShorts)
         return FeedPage(videos: order.compactMap { acc[$0] }, continuation: continuationToken(json))
     }
 
@@ -387,12 +438,17 @@ enum InnerTube {
         "compactPromotedVideoRenderer", "statementBannerRenderer",
     ]
 
-    private static func walkVideos(_ node: Any, into acc: inout [String: FeedVideo], order: inout [String], includePlaylists: Bool = false) {
+    private static func walkVideos(_ node: Any, into acc: inout [String: FeedVideo], order: inout [String], includePlaylists: Bool = false, includeShorts: Bool = false) {
         if let dict = node as? [String: Any] {
             // Skip ad/promoted subtrees entirely.
             if dict.keys.contains(where: { adKeys.contains($0) }) { return }
             // Modern YouTube web home feed: lockupViewModel.
             if let lvm = dict["lockupViewModel"] as? [String: Any] { addLockup(lvm, into: &acc, order: &order, includePlaylists: includePlaylists) }
+            // A channel's Shorts tab is entirely shortsLockupViewModel — a different shape the home
+            // feed deliberately does NOT pull in (it would inject Shorts into the main grid).
+            if includeShorts, let sl = dict["shortsLockupViewModel"] as? [String: Any] {
+                addShortLockup(sl, into: &acc, order: &order)
+            }
             // Legacy renderer (ads / older shelves).
             if let vid = dict["videoId"] as? String, dict["thumbnail"] != nil,
                let title = text(dict["title"]), !title.isEmpty, acc[vid] == nil {
@@ -410,9 +466,9 @@ enum InnerTube {
                 )
                 order.append(vid)
             }
-            for value in dict.values { walkVideos(value, into: &acc, order: &order, includePlaylists: includePlaylists) }
+            for value in dict.values { walkVideos(value, into: &acc, order: &order, includePlaylists: includePlaylists, includeShorts: includeShorts) }
         } else if let arr = node as? [Any] {
-            for value in arr { walkVideos(value, into: &acc, order: &order, includePlaylists: includePlaylists) }
+            for value in arr { walkVideos(value, into: &acc, order: &order, includePlaylists: includePlaylists, includeShorts: includeShorts) }
         }
     }
 
@@ -511,17 +567,44 @@ enum InnerTube {
         }
         let thumbVM = dig(lvm, "contentImage", "collectionThumbnailViewModel", "primaryThumbnail", "thumbnailViewModel") as? [String: Any] ?? [:]
         let thumbURL = (dig(thumbVM, "image", "sources") as? [[String: Any]])?.last?["url"] as? String ?? ""
+        // The metadata rows differ by surface: in SEARCH the first part is the owner's name, but on
+        // a channel's own Playlists tab the owner is implicit and the parts are UI chrome instead
+        // ("View full playlist", "Updated 3 days ago"). Taking parts.first blindly put "View full
+        // playlist" in the byline, complete with a verified badge and a "V" avatar.
+        let chrome = ["view full playlist", "view full podcast", "playlist", "podcast", "album"]
+        let owner = parts.first { p in
+            let l = p.lowercased()
+            return !chrome.contains(l) && !l.hasPrefix("updated")
+                && !l.hasSuffix(" videos") && !l.hasSuffix(" video")
+                && !l.hasSuffix(" episodes") && !l.hasSuffix(" episode")
+        } ?? ""
         acc[id] = FeedVideo(
             id: id, title: title,
-            channel: parts.first ?? "",
-            channelId: channelId(in: lvm),
-            channelAvatar: firstYT3URL(lvm),
+            channel: owner,
+            channelId: owner.isEmpty ? nil : channelId(in: lvm),
+            channelAvatar: owner.isEmpty ? "" : firstYT3URL(lvm),
             thumbnail: thumbURL,
-            views: nil, published: nil, durationSeconds: nil,
+            views: nil,
+            published: parts.first { $0.lowercased().hasPrefix("updated") },
+            durationSeconds: nil,
             playlistId: id,
             videoCountText: badgeText(in: thumbVM)
         )
         order.append(id)
+    }
+
+    /// One Shorts entry. `accessibilityText` reads "Title, 677 thousand views - play Short", so the
+    /// title is the part before the last comma — the only place the plain title is exposed.
+    private static func addShortLockup(_ sl: [String: Any], into acc: inout [String: FeedVideo], order: inout [String]) {
+        guard let vid = firstValue("videoId", sl) as? String, acc[vid] == nil else { return }
+        let thumb = ((firstValue("sources", firstValue("thumbnailViewModel", sl) ?? [:]) as? [[String: Any]])?.last?["url"] as? String)
+            ?? ((firstValue("thumbnails", sl) as? [[String: Any]])?.last?["url"] as? String) ?? ""
+        var title = (sl["accessibilityText"] as? String) ?? ""
+        if let r = title.range(of: ", ", options: .backwards) { title = String(title[..<r.lowerBound]) }
+        acc[vid] = FeedVideo(id: vid, title: title, channel: "", channelId: nil, channelAvatar: "",
+                             thumbnail: thumb, views: nil, published: nil, durationSeconds: nil,
+                             isShort: true)
+        order.append(vid)
     }
 
     /// First thumbnail-overlay badge text in the subtree ("51 videos", "Album", …).

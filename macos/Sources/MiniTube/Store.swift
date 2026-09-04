@@ -267,7 +267,7 @@ final class Store: ObservableObject {
     /// through here so the two paths can't disagree.
     func openItem(_ v: VideoListItem) {
         if let pid = v.playlistId { openPlaylist(pid, title: title(for: v), fromGrid: true) }
-        else { openWatch(v.id) }
+        else { openWatch(v.id) }   // Shorts included: the real watch page plays them fine
     }
     func openItemById(_ id: String) {
         if let v = videos.first(where: { $0.id == id }) ?? hdrVideos.first(where: { $0.id == id }) {
@@ -384,13 +384,19 @@ final class Store: ObservableObject {
 
     /// Open a channel page (from a subscription row, the watch page, etc.). The
     /// channel's uploads replace the feed grid; continuous scroll reuses /api/feed/more.
+    /// Params of the channel tab currently shown (nil = the default Videos tab). Drives which tab
+    /// reads as selected, and is snapshotted across the fetch so a fast second tap can't let a
+    /// slower first response land on top of it.
+    @Published private(set) var channelTabParams: String?
+
     func openChannel(_ id: String) {
         guard !id.isEmpty else { return }
         watchVideoId = nil; watchInfo = nil; fullscreen = false; searchQuery = ""
         channelId = id; channelInfo = nil; videos = []; feedContinuation = nil
+        channelTabParams = nil
         Task { [id] in
             let info = await fetchChannel(id)
-            guard channelId == id else { return }   // ignore if user navigated away
+            guard channelId == id, channelTabParams == nil else { return }   // navigated away / tab switched
             if let info {
                 channelInfo = info
                 videos = info.videos
@@ -399,14 +405,41 @@ final class Store: ObservableObject {
         }
     }
 
+    /// Switch to one of the channel's own tabs (Playlists, Shorts, Live, …). Keeps the header
+    /// mounted — only the grid is replaced — and shows the skeleton while the tab loads.
+    func openChannelTab(_ tab: ChannelTabInfo) {
+        guard let id = channelId, channelTabParams != tab.params else { return }
+        channelTabParams = tab.params
+        videos = []; feedContinuation = nil
+        channelTabLoading = true
+        Task { [id, params = tab.params] in
+            let info = await fetchChannel(id, params: params)
+            // Both guards matter: the user may have left the channel, or tapped a third tab while
+            // this one was still in flight.
+            guard channelId == id, channelTabParams == params else { return }
+            channelTabLoading = false
+            guard let info else { return }
+            videos = info.videos
+            feedContinuation = info.continuation
+            // Keep the header/tab list from the first load; a tab response repeats them, but
+            // reassigning would needlessly re-render the header.
+            if channelInfo?.tabs == nil { channelInfo = info }
+        }
+    }
+    @Published var channelTabLoading = false
+
     func closeChannel() {
         channelId = nil; channelInfo = nil
         Task { await loadVideos() }
     }
 
-    private func fetchChannel(_ id: String) async -> ChannelInfo? {
-        guard let encoded = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
-              let url = URL(string: "\(base)/api/channel/\(encoded)") else { return nil }
+    private func fetchChannel(_ id: String, params: String? = nil) async -> ChannelInfo? {
+        guard let encoded = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) else { return nil }
+        var str = "\(base)/api/channel/\(encoded)"
+        if let params, let p = params.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) {
+            str += "?params=\(p)"
+        }
+        guard let url = URL(string: str) else { return nil }
         do {
             let (data, _) = try await URLSession.shared.data(from: url)
             return try JSONDecoder().decode(ChannelInfo.self, from: data)
@@ -617,14 +650,16 @@ final class Store: ObservableObject {
         defer { loadingMore = false }
         // Snapshot the navigation context: a page that returns after the user
         // switched feed/search/channel must not be appended into the new grid.
-        let ctx = (feedMode, searchQuery, channelId)
+        // channelTabParams included: switching channel tabs mid-fetch must not append the old
+        // tab's next page into the new one.
+        let ctx = (feedMode, searchQuery, channelId, channelTabParams)
         do {
             var req = URLRequest(url: url); req.httpMethod = "POST"
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
             req.httpBody = try JSONEncoder().encode(["continuation": token])
             let (data, _) = try await URLSession.shared.data(for: req)
             guard let page = await decodeOffMain(FeedPageResponse.self, from: data, endpoint: "feed/more") else { return }
-            guard ctx == (feedMode, searchQuery, channelId) else { return }   // stale page
+            guard ctx == (feedMode, searchQuery, channelId, channelTabParams) else { return }   // stale page
             // History and playlists may legitimately list the same video more than once;
             // only de-dupe feeds where a repeat is spurious (home / subscriptions / search).
             if feedMode == "history" || feedMode == "playlist" {

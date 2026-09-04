@@ -24,6 +24,7 @@ struct VideoListItem: Content {
     var feedback: [FeedbackOption] = []
     var playlistId: String? = nil      // set → this item is a PLAYLIST; open /playlist, not /watch
     var videoCountText: String? = nil  // playlist badge ("51 videos"), YouTube's wording
+    var isShort: Bool = false          // vertical Short (channel Shorts tab)
 }
 
 /// A feedback action surfaced in the card's 3-dot menu, with the token needed to perform it.
@@ -75,6 +76,13 @@ struct Playlist: Content {
     let count: String
 }
 
+struct ChannelTabInfo: Content {
+    let slug: String       // featured | videos | shorts | streams | playlists | podcasts
+    let title: String      // YouTube's own label
+    let params: String     // pass back as ?params= to load this tab
+    let selected: Bool
+}
+
 struct ChannelResponse: Content {
     let channelId: String
     let name: String
@@ -84,6 +92,9 @@ struct ChannelResponse: Content {
     let videos: [VideoListItem]
     let continuation: String?
     let subscribed: Bool
+    /// The channel's real tabs, already filtered to the ones this app can render. Empty on an
+    /// older backend — the client falls back to showing no tab bar rather than fake tabs.
+    var tabs: [ChannelTabInfo] = []
 }
 
 enum VideosController {
@@ -332,14 +343,18 @@ enum VideosController {
     /// with a continuation token so the grid scrolls via /api/feed/more.
     static func channel(_ req: Request) async throws -> ChannelResponse {
         let id = try req.parameters.require("id")
-        guard let ch = await InnerTube.channel(channelId: id, session: await req.auth.sessionIfConnected(), client: req.client) else {
+        // ?params= selects a tab (Playlists, Shorts, …); absent = the default Videos tab.
+        let tabParams: String? = try? req.query.get(String.self, at: "params")
+        guard let ch = await InnerTube.channel(channelId: id, tabParams: tabParams,
+                                               session: await req.auth.sessionIfConnected(), client: req.client) else {
             throw Abort(.notFound, reason: "No channel data for \(id)")
         }
         return ChannelResponse(
             channelId: id, name: ch.name, handle: ch.handle,
             subscribers: ch.subscribers, avatar: ch.avatar,
             videos: ch.videos.map(listItem(from:)), continuation: ch.continuation,
-            subscribed: ch.subscribed
+            subscribed: ch.subscribed,
+            tabs: ch.tabs.map { ChannelTabInfo(slug: $0.slug, title: $0.title, params: $0.params, selected: $0.selected) }
         )
     }
 
@@ -402,7 +417,8 @@ enum VideosController {
             channelId: fv.channelId, channelAvatar: fv.channelAvatar,
             previewUrl: fv.previewUrl,
             feedback: fv.feedback.map { FeedbackOption(kind: $0.kind, label: $0.label, token: $0.token, undoToken: $0.undoToken) },
-            playlistId: fv.playlistId, videoCountText: fv.videoCountText
+            playlistId: fv.playlistId, videoCountText: fv.videoCountText,
+            isShort: fv.isShort
         )
     }
 

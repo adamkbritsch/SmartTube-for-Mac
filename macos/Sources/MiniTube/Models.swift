@@ -90,6 +90,7 @@ struct VideoListItem: Codable, Identifiable, Hashable {
     var feedback: [FeedbackOption] = []
     var playlistId: String? = nil      // set → this item is a PLAYLIST (search results); open /playlist
     var videoCountText: String? = nil  // playlist badge, YouTube's wording ("51 videos")
+    var isShort: Bool = false          // vertical Short (a channel's Shorts tab)
 }
 
 extension VideoListItem {
@@ -97,6 +98,7 @@ extension VideoListItem {
     /// "Copy link" / "Open in YouTube" / Visionary send goes through this one place.
     var webURL: String {
         if let pid = playlistId { return "https://www.youtube.com/playlist?list=\(pid)" }
+        if isShort { return "https://www.youtube.com/shorts/\(id)" }
         return "https://www.youtube.com/watch?v=\(id)"
     }
 }
@@ -140,6 +142,7 @@ extension VideoListItem {
         feedback = (try? c.decode([FeedbackOption].self, forKey: .feedback)) ?? []
         playlistId = try? c.decode(String.self, forKey: .playlistId)
         videoCountText = try? c.decode(String.self, forKey: .videoCountText)
+        isShort = (try? c.decode(Bool.self, forKey: .isShort)) ?? false
     }
 }
 
@@ -236,6 +239,14 @@ struct Playlist: Codable, Identifiable, Hashable {
     let count: String
 }
 
+struct ChannelTabInfo: Codable, Equatable, Identifiable {
+    let slug: String       // featured | videos | shorts | streams | playlists | podcasts
+    let title: String      // YouTube's own label
+    let params: String     // pass back to load this tab
+    let selected: Bool
+    var id: String { params }
+}
+
 struct ChannelInfo: Codable, Equatable {
     let channelId: String
     let name: String
@@ -245,6 +256,9 @@ struct ChannelInfo: Codable, Equatable {
     let videos: [VideoListItem]
     let continuation: String?
     let subscribed: Bool?   // signed-in user already subscribed (optional for decode tolerance)
+    /// The channel's real tabs, already filtered server-side to ones this app can render.
+    /// Decode-tolerant: an older backend sends none and the tab bar simply doesn't appear.
+    var tabs: [ChannelTabInfo]? = nil
 }
 
 struct Comment: Codable, Equatable, Identifiable {
