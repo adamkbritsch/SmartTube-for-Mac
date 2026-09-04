@@ -2386,8 +2386,48 @@ private struct VideoCard: View {
 // MARK: - Logo
 
 struct CommentRow: View {
+    @EnvironmentObject var store: Store
     let comment: Comment
-    @State private var likeState = 0        // -1 dislike, 0 none, 1 like (visual only)
+    /// The user's REAL vote on this comment. Seeded from YouTube and written back through
+    /// /api/comment/vote — this used to be annotated "(visual only)": the thumbs filled in and
+    /// nothing was ever sent, so a liked comment silently reverted on the next page load.
+    @State private var likeState = 0
+    @State private var seeded = false
+    @State private var busy = false
+
+    /// The vote to send for a tap, given where we are now. YouTube ships a distinct token for each
+    /// transition, including the two "undo" ones.
+    private func token(for target: Int) -> String {
+        if target == 0 { return likeState == 1 ? comment.unlikeToken : comment.undislikeToken }
+        return target == 1 ? comment.likeToken : comment.dislikeToken
+    }
+    private var canVote: Bool { !comment.likeToken.isEmpty || !comment.dislikeToken.isEmpty }
+
+    private func vote(_ target: Int) {
+        guard !busy else { return }
+        let tok = token(for: target)
+        guard !tok.isEmpty else { return }
+        let previous = likeState
+        busy = true
+        withAnimation(.easeOut(duration: 0.1)) { likeState = target }
+        Task {
+            let ok = await store.voteComment(token: tok)
+            busy = false
+            guard !ok else { return }
+            withAnimation(.easeOut(duration: 0.15)) { likeState = previous }   // never fake a vote
+            store.actionNote = "Couldn't vote on that comment"
+            store.actionNoteIsError = true
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            withAnimation { store.actionNote = nil }
+        }
+    }
+
+    /// YouTube ships the count for both states, so the number flips without refetching.
+    private var likeCountText: String {
+        if likeState == 1, !comment.likesLiked.isEmpty { return comment.likesLiked }
+        return comment.likes.isEmpty ? "0" : comment.likes
+    }
+
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             AvatarView(url: comment.avatar, name: comment.author, size: 36)
@@ -2398,20 +2438,33 @@ struct CommentRow: View {
                 }
                 Text(comment.text).font(.system(size: 13)).fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 16) {
-                    Button { withAnimation(.easeOut(duration: 0.1)) { likeState = likeState == 1 ? 0 : 1 } } label: {
-                        Label(comment.likes.isEmpty ? "0" : comment.likes,
-                              systemImage: likeState == 1 ? "hand.thumbsup.fill" : "hand.thumbsup")
-                            .foregroundStyle(likeState == 1 ? AnyShapeStyle(Color.primary) : AnyShapeStyle(Color.secondary))
-                    }.buttonStyle(.plain).clickable()
-                    Button { withAnimation(.easeOut(duration: 0.1)) { likeState = likeState == -1 ? 0 : -1 } } label: {
-                        Image(systemName: likeState == -1 ? "hand.thumbsdown.fill" : "hand.thumbsdown")
-                            .foregroundStyle(likeState == -1 ? AnyShapeStyle(Color.primary) : AnyShapeStyle(Color.secondary))
-                    }.buttonStyle(.plain).clickable()
+                    // Hidden when YouTube offered no tokens (signed out): controls that cannot
+                    // work shouldn't be drawn.
+                    if canVote {
+                        Button { vote(likeState == 1 ? 0 : 1) } label: {
+                            Label(likeCountText,
+                                  systemImage: likeState == 1 ? "hand.thumbsup.fill" : "hand.thumbsup")
+                                .foregroundStyle(likeState == 1 ? AnyShapeStyle(Color.primary) : AnyShapeStyle(Color.secondary))
+                        }.buttonStyle(.plain).clickable().disabled(busy)
+                        Button { vote(likeState == -1 ? 0 : -1) } label: {
+                            Image(systemName: likeState == -1 ? "hand.thumbsdown.fill" : "hand.thumbsdown")
+                                .foregroundStyle(likeState == -1 ? AnyShapeStyle(Color.primary) : AnyShapeStyle(Color.secondary))
+                        }.buttonStyle(.plain).clickable().disabled(busy)
+                    } else {
+                        Label(comment.likes.isEmpty ? "0" : comment.likes, systemImage: "hand.thumbsup")
+                            .foregroundStyle(.secondary)
+                    }
                     if !comment.replies.isEmpty {
                         Text("\(comment.replies) replies").foregroundStyle(.secondary)
                     }
                 }
                 .font(.system(size: 12))
+                .onAppear {
+                    // Seed once from YouTube's real state; never clobber a vote in flight.
+                    guard !seeded else { return }
+                    seeded = true
+                    likeState = comment.likeState
+                }
             }
             Spacer(minLength: 0)
         }

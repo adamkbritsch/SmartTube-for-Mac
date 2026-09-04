@@ -751,7 +751,20 @@ enum InnerTube {
         let text: String
         let published: String
         let likes: String
+        /// The count YouTube shows once YOU have liked it — shipped alongside the normal one, so
+        /// the number can flip on click without refetching the page.
+        var likesLiked: String = ""
         let replies: String
+        /// Links this comment to its toolbar state entity (which holds the current vote).
+        var toolbarStateKey: String = ""
+        /// Vote tokens for THIS comment, straight from YouTube's own payload. Empty when the user
+        /// is signed out or YouTube offered none — the client hides the buttons rather than
+        /// showing controls that cannot work.
+        var likeToken: String = ""
+        var unlikeToken: String = ""
+        var dislikeToken: String = ""
+        var undislikeToken: String = ""
+        var likeState: Int = 0     // -1 disliked, 0 neither, 1 liked
     }
 
     struct WatchMeta: Sendable {
@@ -955,7 +968,85 @@ enum InnerTube {
             }
         }
         walk(json)
+
+        // SECOND PASS. A comment's vote buttons are NOT in its own payload: the tokens live in
+        // frameworkUpdates.entityBatchUpdate.mutations as engagementToolbarSurfaceEntityPayload
+        // (like/unlike/dislike/undislike commands), and the current vote in
+        // engagementToolbarStateEntityPayload. Both are keyed by opaque base64 entity keys, but
+        // every one of those keys embeds the plain comment id, so they can be joined on it.
+        let (tokens, states) = commentToolbars(json)
+        out = out.map { c in
+            var c = c
+            if let t = tokens[c.commentId] {
+                c.likeToken = t.like; c.unlikeToken = t.unlike
+                c.dislikeToken = t.dislike; c.undislikeToken = t.undislike
+            }
+            if let st = states[c.toolbarStateKey] { c.likeState = st }
+            return c
+        }
         return (count, out, commentsPageToken(json))
+    }
+
+    private struct CommentTokens { var like = ""; var unlike = ""; var dislike = ""; var undislike = "" }
+
+    /// Join the toolbar entities to their comments. Returns (commentId → tokens, stateKey → vote).
+    private static func commentToolbars(_ json: Any) -> ([String: CommentTokens], [String: Int]) {
+        guard let muts = dig(json, "frameworkUpdates", "entityBatchUpdate", "mutations") as? [[String: Any]] else {
+            return ([:], [:])
+        }
+        var tokens: [String: CommentTokens] = [:]
+        var states: [String: Int] = [:]
+        for m in muts {
+            guard let payload = m["payload"] as? [String: Any] else { continue }
+
+            if let st = payload["engagementToolbarStateEntityPayload"] as? [String: Any],
+               let key = st["key"] as? String {
+                switch st["likeState"] as? String {
+                case "TOOLBAR_LIKE_STATE_LIKED":    states[key] = 1
+                case "TOOLBAR_LIKE_STATE_DISLIKED": states[key] = -1
+                default:                            states[key] = 0
+                }
+            }
+
+            if let surf = payload["engagementToolbarSurfaceEntityPayload"] as? [String: Any],
+               let key = (surf["key"] as? String) ?? (m["entityKey"] as? String),
+               let cid = commentId(inEntityKey: key) {
+                func token(_ name: String) -> String {
+                    (dig(surf, name, "innertubeCommand", "performCommentActionEndpoint", "action") as? String) ?? ""
+                }
+                tokens[cid] = CommentTokens(like: token("likeCommand"), unlike: token("unlikeCommand"),
+                                            dislike: token("dislikeCommand"), undislike: token("undislikeCommand"))
+            }
+        }
+        return (tokens, states)
+    }
+
+    /// The comment id embedded in a toolbar entity key. The key is base64 (URL-escaped) protobuf
+    /// whose first field is the id as plain ASCII — e.g. "Ugwi…AaABAg" — so the join needs no
+    /// protobuf parsing, just the leading length-delimited string.
+    private static func commentId(inEntityKey key: String) -> String? {
+        let unescaped = key.removingPercentEncoding ?? key
+        var padded = unescaped
+        while padded.count % 4 != 0 { padded += "=" }
+        guard let data = Data(base64Encoded: padded) else { return nil }
+        let bytes = [UInt8](data)
+        guard bytes.count > 2, bytes[0] == 0x12 else { return nil }
+        let len = Int(bytes[1])
+        guard len > 0, bytes.count >= 2 + len else { return nil }
+        // The surface key's field carries a SUFFIX the comment's own id does not have
+        // ("Ugwi…AaABAg/12"), so trim at the first separator or the join silently never matches.
+        var id = String(decoding: bytes[2..<(2 + len)], as: UTF8.self)
+        if let cut = id.firstIndex(where: { $0 == "/" || $0 == " " }) { id = String(id[..<cut]) }
+        return id.hasPrefix("Ug") ? id : nil
+    }
+
+    /// Cast / clear a vote on one comment. The token IS the action — it comes from YouTube's own
+    /// payload, so this can only ever perform something YouTube offered for that comment.
+    static func performCommentAction(token: String, session: FirefoxSession.Session, client: Client) async -> Bool {
+        guard !token.isEmpty else { return false }
+        var body = context()
+        body["actions"] = [token]
+        return await call(path: "comment/perform_comment_action", body: body, session: session, client: client) != nil
     }
 
     /// The PAGE-level comments continuation — the `continuationItemRenderer` that is NOT
@@ -985,7 +1076,9 @@ enum InnerTube {
             text: text(props["content"]) ?? "",
             published: (props["publishedTime"] as? String) ?? "",
             likes: (toolbar["likeCountNotliked"] as? String) ?? (toolbar["likeCountLiked"] as? String) ?? "",
-            replies: (toolbar["replyCount"] as? String) ?? ""
+            likesLiked: (toolbar["likeCountLiked"] as? String) ?? "",
+            replies: (toolbar["replyCount"] as? String) ?? "",
+            toolbarStateKey: (props["toolbarStateKey"] as? String) ?? ""
         )
     }
 

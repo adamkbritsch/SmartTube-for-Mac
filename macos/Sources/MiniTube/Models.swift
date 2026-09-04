@@ -274,7 +274,15 @@ struct Comment: Codable, Equatable, Identifiable {
     let text: String
     let published: String
     let likes: String
+    var likesLiked: String = ""     // count to show once you've liked it (YouTube ships both)
     let replies: String
+    // Vote tokens straight from YouTube's payload; empty when it offered none (e.g. signed out),
+    // in which case the buttons are hidden rather than shown inert.
+    var likeToken: String = ""
+    var unlikeToken: String = ""
+    var dislikeToken: String = ""
+    var undislikeToken: String = ""
+    var likeState: Int = 0          // -1 disliked, 0 neither, 1 liked — the REAL current vote
     var id: String {
         if let c = commentId, !c.isEmpty { return c }
         return author + "|" + published + "|" + text.prefix(24)   // fallback for older payloads
@@ -289,7 +297,13 @@ struct Comment: Codable, Equatable, Identifiable {
         text = (try? c.decode(String.self, forKey: .text)) ?? ""
         published = (try? c.decode(String.self, forKey: .published)) ?? ""
         likes = (try? c.decode(String.self, forKey: .likes)) ?? ""
+        likesLiked = (try? c.decode(String.self, forKey: .likesLiked)) ?? ""
         replies = (try? c.decode(String.self, forKey: .replies)) ?? ""
+        likeToken = (try? c.decode(String.self, forKey: .likeToken)) ?? ""
+        unlikeToken = (try? c.decode(String.self, forKey: .unlikeToken)) ?? ""
+        dislikeToken = (try? c.decode(String.self, forKey: .dislikeToken)) ?? ""
+        undislikeToken = (try? c.decode(String.self, forKey: .undislikeToken)) ?? ""
+        likeState = (try? c.decode(Int.self, forKey: .likeState)) ?? 0
     }
 }
 

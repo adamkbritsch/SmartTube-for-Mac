@@ -33,6 +33,7 @@ func routes(_ app: Application) throws {
     api.post("search", "more", use: VideosController.searchMore)
     api.get("watch", ":id", use: VideosController.watch)
     api.post("comments", "more", use: VideosController.moreComments)
+    api.post("comment", "vote", use: VideosController.commentVote)
     api.post("subscribe", use: VideosController.subscribe)
     api.post("like", use: VideosController.like)
     api.post("feedback", use: VideosController.feedback)   // card 3-dot menu: not interested / undo

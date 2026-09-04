@@ -261,6 +261,17 @@ enum VideosController {
         return ActionResult(ok: ok)
     }
 
+    /// Vote on a COMMENT. The body carries a token lifted from YouTube's own comment payload, so
+    /// this can only perform an action YouTube itself offered for that comment.
+    static func commentVote(_ req: Request) async throws -> ActionResult {
+        struct Body: Content { let token: String }
+        let b = try req.content.decode(Body.self)
+        guard let session = await req.auth.sessionIfConnected(), !b.token.isEmpty else {
+            return ActionResult(ok: false)
+        }
+        return ActionResult(ok: await InnerTube.performCommentAction(token: b.token, session: session, client: req.client))
+    }
+
     /// Like / dislike / clear the like on a video for the signed-in account.
     static func like(_ req: Request) async throws -> ActionResult {
         struct Body: Content { let videoId: String; let state: String }   // "like" | "dislike" | "none"

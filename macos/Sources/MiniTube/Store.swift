@@ -737,6 +737,19 @@ final class Store: ObservableObject {
         return true
     }
 
+    /// Cast or clear a vote on a comment. The token comes from YouTube's own comment payload, so
+    /// only actions YouTube offered can be performed. Returns whether it stuck, so the caller can
+    /// revert its optimistic flip instead of showing a vote that never landed.
+    func voteComment(token: String) async -> Bool {
+        guard !token.isEmpty, let url = URL(string: "\(base)/api/comment/vote") else { return false }
+        var req = URLRequest(url: url); req.httpMethod = "POST"; req.timeoutInterval = 20
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONEncoder().encode(["token": token])
+        guard let (data, _) = try? await URLSession.shared.data(for: req),
+              let r = try? JSONDecoder().decode(ActionResult.self, from: data) else { return false }
+        return r.ok
+    }
+
     /// Whether this video has already been logged to history in this session — drives the menu row.
     func isMarkedWatched(_ videoId: String) -> Bool { markedWatched.contains(videoId) }
 
