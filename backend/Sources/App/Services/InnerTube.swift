@@ -102,6 +102,7 @@ enum InnerTube {
         var playlistId: String? = nil        // set → this item IS a playlist (id == contentId)
         var videoCountText: String? = nil    // playlist badge, YouTube's own wording ("51 videos")
         var isShort: Bool = false            // came from a shortsLockupViewModel (vertical, /shorts)
+        var verified: Bool = false           // channel carries YouTube's verified badge
     }
 
     /// The signed animated-preview URL (`i.ytimg.com/an_webp/…mqdefault_6s.webp`) YouTube ships
@@ -462,7 +463,8 @@ enum InnerTube {
                     thumbnail: thumb(dict["thumbnail"]),
                     views: text(dict["viewCountText"]), published: text(dict["publishedTimeText"]),
                     durationSeconds: parseDuration(text(dict["lengthText"])),
-                    previewUrl: movingThumb(dict)
+                    previewUrl: movingThumb(dict),
+                    verified: verifiedBadge(in: dict["ownerBadges"] ?? [])
                 )
                 order.append(vid)
             }
@@ -544,7 +546,11 @@ enum InnerTube {
             published: parts.first(where: { $0.lowercased().contains("ago") }),
             durationSeconds: parseDuration(timeBadge(lvm)),
             previewUrl: movingThumb(lvm),
-            feedback: feedbackActions(inLockup: lvm, contentId: id)
+            feedback: feedbackActions(inLockup: lvm, contentId: id),
+            // Scan the whole lockup: the byline badge is not always under `metadata`, and the
+            // match requires a VERIFIED-styled badge specifically, so thumbnail badges like "4K"
+            // or "New" can't produce a false positive.
+            verified: verifiedBadge(in: lvm)
         )
         order.append(id)
     }
@@ -605,6 +611,30 @@ enum InnerTube {
                              thumbnail: thumb, views: nil, published: nil, durationSeconds: nil,
                              isShort: true)
         order.append(vid)
+    }
+
+    /// Whether this item's channel carries YouTube's VERIFIED badge.
+    ///
+    /// The app used to draw `checkmark.seal.fill` on every single card and channel row with no
+    /// backing data at all — so an unverified channel was shown as verified. YouTube ships the real
+    /// thing two ways depending on the surface: legacy renderers put it in `ownerBadges` as a
+    /// `metadataBadgeRenderer` with style BADGE_STYLE_TYPE_VERIFIED, and the newer view models use
+    /// an icon/type of CHECK_CIRCLE_FILLED. Both are checked; anything else is treated as NOT
+    /// verified, because inventing this badge is worse than omitting it.
+    private static func verifiedBadge(in node: Any) -> Bool {
+        if let d = node as? [String: Any] {
+            if let style = d["style"] as? String, style.contains("VERIFIED") { return true }
+            if let icon = d["iconName"] as? String ?? d["iconType"] as? String,
+               icon.contains("CHECK_CIRCLE") { return true }
+            for (k, v) in d {
+                // Don't descend into nested items — a shelf's other cards would leak their badges in.
+                if k == "contents" || k == "items" { continue }
+                if verifiedBadge(in: v) { return true }
+            }
+        } else if let a = node as? [Any] {
+            for v in a { if verifiedBadge(in: v) { return true } }
+        }
+        return false
     }
 
     /// First thumbnail-overlay badge text in the subtree ("51 videos", "Album", …).
@@ -728,6 +758,8 @@ enum InnerTube {
         let title: String
         let channel: String
         let channelId: String
+        let channelAvatar: String   // the uploader's real profile picture
+        let channelVerified: Bool   // YouTube's verified badge for this channel
         let subscribers: String
         let views: String
         let published: String
@@ -812,6 +844,10 @@ enum InnerTube {
             title: title,
             channel: text(dig(owner, "title")) ?? "",
             channelId: (firstValue("browseId", owner) as? String) ?? "",
+            // The watch page drew AvatarView(url: nil) and an unconditional verified badge, so the
+            // uploader always got a monogram and always looked verified. Both are in `owner`.
+            channelAvatar: firstYT3URL(owner),
+            channelVerified: verifiedBadge(in: owner),
             subscribers: text(dig(owner, "subscriberCountText")) ?? "",
             views: text(dig(vcr, "viewCount")) ?? "",
             published: text(dig(pri, "relativeDateText")) ?? "",

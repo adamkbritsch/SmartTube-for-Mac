@@ -25,6 +25,7 @@ struct VideoListItem: Content {
     var playlistId: String? = nil      // set → this item is a PLAYLIST; open /playlist, not /watch
     var videoCountText: String? = nil  // playlist badge ("51 videos"), YouTube's wording
     var isShort: Bool = false          // vertical Short (channel Shorts tab)
+    var verified: Bool = false         // channel is YouTube-verified (badge is drawn ONLY when true)
 }
 
 /// A feedback action surfaced in the card's 3-dot menu, with the token needed to perform it.
@@ -49,6 +50,8 @@ struct WatchInfo: Content {
     let title: String
     let channel: String
     let channelId: String
+    let channelAvatar: String
+    let channelVerified: Bool
     let subscribers: String
     let views: String
     let published: String
@@ -220,6 +223,7 @@ enum VideosController {
         }
         return WatchInfo(
             videoId: id, title: m.title, channel: m.channel, channelId: m.channelId,
+            channelAvatar: m.channelAvatar, channelVerified: m.channelVerified,
             subscribers: m.subscribers, views: m.views, published: m.published,
             description: m.description, descriptionLinks: m.descriptionLinks, likes: m.likes,
             recommendations: m.recommendations.map(listItem(from:)),
@@ -418,7 +422,7 @@ enum VideosController {
             previewUrl: fv.previewUrl,
             feedback: fv.feedback.map { FeedbackOption(kind: $0.kind, label: $0.label, token: $0.token, undoToken: $0.undoToken) },
             playlistId: fv.playlistId, videoCountText: fv.videoCountText,
-            isShort: fv.isShort
+            isShort: fv.isShort, verified: fv.verified
         )
     }
 

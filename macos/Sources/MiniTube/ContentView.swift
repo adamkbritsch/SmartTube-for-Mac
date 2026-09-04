@@ -511,11 +511,15 @@ struct WatchPage: View {
                 if let id = info?.channelId, !id.isEmpty { store.openChannel(id) }
             } label: {
                 HStack(spacing: 12) {
-                    AvatarView(url: nil, name: info?.channel ?? "?", size: 40)
+                    // The uploader's REAL avatar — this was hardcoded to nil, so every channel on
+                    // the watch page fell back to a monogram even though YouTube ships the picture.
+                    AvatarView(url: info?.channelAvatar, name: info?.channel ?? "?", size: 40)
                     VStack(alignment: .leading, spacing: 1) {
                         HStack(spacing: 4) {
                             Text(info?.channel ?? " ").font(.system(size: 15, weight: .semibold))
-                            Image(systemName: "checkmark.seal.fill").font(.system(size: 11)).foregroundStyle(.secondary)
+                            if info?.channelVerified == true {
+                                Image(systemName: "checkmark.seal.fill").font(.system(size: 11)).foregroundStyle(.secondary)
+                            }
                         }
                         Text(info?.subscribers ?? " ").font(.caption).foregroundStyle(.secondary)
                     }
@@ -829,11 +833,15 @@ struct RecRow: View {
     @EnvironmentObject var store: Store
     let video: VideoListItem
     @State private var hover = false
+    @State private var showMenu = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
             ZStack(alignment: .bottomTrailing) {
-                CachedImage(url: video.originalThumbnail) { Rectangle().fill(Color.primary.opacity(0.12)) }
+                // store.thumbnail/title, not the raw originals: the up-next rail used to ignore the
+                // DeArrow setting every other card honours, so flipping it changed the feed and the
+                // watch page but silently not this rail.
+                CachedImage(url: store.thumbnail(for: video)) { Rectangle().fill(Color.primary.opacity(0.12)) }
                 .frame(width: 168, height: 94).clipped().clipShape(RoundedRectangle(cornerRadius: 8))
                 if let d = store.durationLabel(for: video) {
                     Text(d).font(.system(size: 11, weight: .semibold))
@@ -843,12 +851,29 @@ struct RecRow: View {
                 }
             }
             VStack(alignment: .leading, spacing: 3) {
-                Text(video.originalTitle).font(.system(size: 14, weight: .semibold)).lineLimit(2)
+                Text(store.title(for: video)).font(.system(size: 14, weight: .semibold)).lineLimit(2)
                 Text(video.channel).font(.system(size: 12)).foregroundStyle(.secondary)
                 Text([video.viewCountText, video.publishedText].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "))
                     .font(.system(size: 12)).foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
+            // The rail had no overflow menu at all, so its cards couldn't be sent to Visionary,
+            // copied, or marked watched — and YouTube's own feedback actions for these items were
+            // received and dropped.
+            if hover || showMenu {
+                Button { showMenu.toggle() } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 13)).foregroundStyle(.secondary)
+                        .frame(width: 22, height: 22)
+                        .background(Circle().fill(Color.primary.opacity(showMenu ? 0.12 : 0)))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain).clickable()
+                .popover(isPresented: $showMenu, arrowEdge: .bottom) {
+                    VideoCardMenu(video: video, dismiss: { showMenu = false })
+                        .environmentObject(store)
+                }
+            }
         }
         .padding(6)
         .background(RoundedRectangle(cornerRadius: 10).fill(hover ? Color.primary.opacity(0.06) : .clear))
@@ -1219,6 +1244,7 @@ private struct SidebarView: View {
     @Binding var selected: String
     var collapsed: Bool = false
     @State private var subsExpanded = false
+    @State private var youExpanded = true
     private let subsCollapsedLimit = 7
 
     var body: some View {
@@ -1243,12 +1269,9 @@ private struct SidebarView: View {
     }
 
     private func miniItem(_ label: String, _ symbol: String) -> some View {
-        Button {
-            selected = label
-            if label == "Home" { store.goHome() }
-            else if label == "Shorts" { store.openShorts() }
-            else if label == "Subscriptions" { store.openSubscriptions() }
-        } label: {
+        // One behaviour for both sidebars: this used to duplicate the switch and silently omit
+        // "You", so the fourth rail tile hovered and pressed like the others and did nothing.
+        Button { activateRow(label) } label: {
             VStack(spacing: 5) {
                 Image(systemName: symbol).font(.system(size: 20))
                 Text(label).font(.system(size: 10)).lineLimit(1).minimumScaleFactor(0.75)
@@ -1278,17 +1301,24 @@ private struct SidebarView: View {
                 } else {
                     let subs = store.subscriptions
                     let shown = subsExpanded ? subs : Array(subs.prefix(subsCollapsedLimit))
-                    ForEach(shown, id: \.self) { channelRow(title: $0, thumb: nil, channelId: nil) }
+                    // channelId resolved from the feed: these rows were dead buttons without it.
+                    ForEach(shown, id: \.self) { channelRow(title: $0, thumb: nil, channelId: store.channelId(forName: $0)) }
                     if subs.count > subsCollapsedLimit { showMoreRow }
                 }
 
-                sectionHeader("You", trailing: "chevron.right")
-                row("Your channel", "person.crop.square")
-                row("History", "clock.arrow.circlepath")
-                row("Playlists", "list.bullet.rectangle")
-                row("Watch later", "clock")
-                row("Liked videos", "hand.thumbsup")
-                row("Your videos", "play.square")
+                // The chevron used to be pure decoration. It now does what a disclosure chevron
+                // says it does: collapse and expand the "You" rows beneath it.
+                sectionHeader("You", trailing: youExpanded ? "chevron.down" : "chevron.right") {
+                    withAnimation(.easeInOut(duration: 0.18)) { youExpanded.toggle() }
+                }
+                if youExpanded {
+                    row("Your channel", "person.crop.square")
+                    row("History", "clock.arrow.circlepath")
+                    row("Playlists", "list.bullet.rectangle")
+                    row("Watch later", "clock")
+                    row("Liked videos", "hand.thumbsup")
+                    row("Your videos", "play.square")
+                }
             }
             .padding(10)
         }
@@ -1321,7 +1351,10 @@ private struct SidebarView: View {
         case "Playlists": store.openPlaylists()
         case "Watch later": store.openWatchLater()
         case "Liked videos": store.openLiked()
-        case "Your channel", "Your videos": store.openMyChannel()
+        case "Your channel", "You": store.openMyChannel()
+        // "Your videos" used to be an alias for "Your channel" — same page, two labels. It now
+        // opens the channel and selects its Videos tab.
+        case "Your videos": store.openMyChannel(tabSlug: "videos")
         default: break
         }
     }
@@ -1389,12 +1422,19 @@ private struct SidebarView: View {
     }
 
 
-    private func sectionHeader(_ title: String, trailing: String?) -> some View {
-        HStack(spacing: 4) {
+    @ViewBuilder
+    private func sectionHeader(_ title: String, trailing: String?, action: (() -> Void)? = nil) -> some View {
+        let label = HStack(spacing: 4) {
             Text(title).font(.system(size: 13, weight: .semibold))
             if let trailing { Image(systemName: trailing).font(.system(size: 10)).foregroundStyle(.secondary) }
         }
         .padding(.horizontal, 12).padding(.top, 14).padding(.bottom, 4)
+        if let action {
+            Button(action: action) { label.contentShape(Rectangle()) }
+                .buttonStyle(.plain).clickable()
+        } else {
+            label   // a genuine label: no chevron, nothing to click
+        }
     }
 }
 
@@ -1731,7 +1771,10 @@ private struct ChannelView: View {
         }
         .padding(.horizontal, 24).padding(.top, 28).padding(.bottom, 16)
         .onAppear { seedSubscribed(); VisionaryBridge.shared.refreshAvailability() }
-        .onChange(of: store.channelInfo?.channelId) { _, _ in seedSubscribed() }
+        .onChange(of: store.channelInfo?.channelId) { _, _ in
+            seedSubscribed()
+            store.applyPendingChannelTab(store.channelInfo?.tabs ?? [])
+        }
     }
 
     /// Reflect the real subscribed state once the channel loads (once per channel;
@@ -2101,10 +2144,12 @@ private struct VideoCardMenu: View {
             if video.playlistId == nil, !store.isMarkedWatched(video.id) {
                 row("Mark as watched", "checkmark.circle") { store.markWatchedFromMenu(video) }
             }
-            if let pid = video.playlistId, visionary.canSend("playlist") {
+            // Every card kind can be sent, each as its own Visionary capability: a playlist card
+            // sends the playlist, a video or Short sends the video. Still gated on canSend, so a
+            // kind Visionary can't receive shows no row at all.
+            if visionary.canSend(video.playlistId != nil ? "playlist" : "video") {
                 row("Send to Visionary", "arrow.up.square") {
-                    store.sendToVisionary(url: "https://www.youtube.com/playlist?list=\(pid)",
-                                          title: video.originalTitle)
+                    store.sendToVisionary(url: video.webURL, title: store.title(for: video))
                 }
             }
             if let cid = video.channelId, !cid.isEmpty {
@@ -2249,7 +2294,9 @@ private struct VideoCard: View {
     private var channelLine: some View {
         let label = HStack(spacing: 4) {
             Text(video.channel).font(.system(size: 13)).underline(channelHover)
-            Image(systemName: "checkmark.seal.fill").font(.system(size: 10))
+            // Drawn only when YouTube actually says so. This badge used to render unconditionally,
+            // which marked every channel in the app as verified.
+            if video.verified { Image(systemName: "checkmark.seal.fill").font(.system(size: 10)) }
         }
         .foregroundStyle(channelHover ? AnyShapeStyle(Color.primary) : AnyShapeStyle(Color.secondary))
         return Group {
@@ -2321,20 +2368,18 @@ private struct VideoCard: View {
                     lineWidth: keyFocused ? 2 : 1))
     }
 
+    /// The card's metadata line — ONLY real values.
+    ///
+    /// This used to fall back to pseudoMeta(), which picked a view count and an upload date out of
+    /// hard-coded lists using the video id's hash, and rendered them exactly like real ones: a card
+    /// with no metadata claimed "834K views · 2 days ago". Stable per id, so it looked entirely
+    /// convincing and never even flickered. Where YouTube gives nothing, the line is now empty —
+    /// an absent fact beats an invented one.
     private var metaLine: String {
-        if video.playlistId != nil {
-            // Never pseudoMeta here: fabricated view counts on a playlist would be a lie.
-            return video.publishedText ?? "Playlist"
-        }
-        let parts = [video.viewCountText, video.publishedText].compactMap { $0 }.filter { !$0.isEmpty }
-        return parts.isEmpty ? pseudoMeta(video.id) : parts.joined(separator: " · ")
-    }
-
-    private func pseudoMeta(_ id: String) -> String {
-        let h = abs(id.hashValue)
-        let views = ["1.2M", "834K", "2.1M", "456K", "3.4M", "998K", "671K", "1.8M"][h % 8]
-        let times = ["3 days ago", "1 week ago", "2 days ago", "5 hours ago", "1 month ago", "yesterday"][h % 6]
-        return "\(views) views · \(times)"
+        if video.playlistId != nil { return video.publishedText ?? "Playlist" }
+        return [video.viewCountText, video.publishedText]
+            .compactMap { $0 }.filter { !$0.isEmpty }
+            .joined(separator: " · ")
     }
 }
 

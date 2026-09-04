@@ -91,6 +91,7 @@ struct VideoListItem: Codable, Identifiable, Hashable {
     var playlistId: String? = nil      // set → this item is a PLAYLIST (search results); open /playlist
     var videoCountText: String? = nil  // playlist badge, YouTube's wording ("51 videos")
     var isShort: Bool = false          // vertical Short (a channel's Shorts tab)
+    var verified: Bool = false         // channel is YouTube-verified; the badge draws ONLY when true
 }
 
 extension VideoListItem {
@@ -143,6 +144,7 @@ extension VideoListItem {
         playlistId = try? c.decode(String.self, forKey: .playlistId)
         videoCountText = try? c.decode(String.self, forKey: .videoCountText)
         isShort = (try? c.decode(Bool.self, forKey: .isShort)) ?? false
+        verified = (try? c.decode(Bool.self, forKey: .verified)) ?? false
     }
 }
 
@@ -180,6 +182,8 @@ struct WatchInfo: Codable, Equatable {
     let title: String
     let channel: String
     let channelId: String
+    let channelAvatar: String
+    let channelVerified: Bool
     let subscribers: String
     let views: String
     let published: String
@@ -201,6 +205,8 @@ struct WatchInfo: Codable, Equatable {
         title = try c.decode(String.self, forKey: .title)
         channel = (try? c.decode(String.self, forKey: .channel)) ?? ""
         channelId = (try? c.decode(String.self, forKey: .channelId)) ?? ""
+        channelAvatar = (try? c.decode(String.self, forKey: .channelAvatar)) ?? ""
+        channelVerified = (try? c.decode(Bool.self, forKey: .channelVerified)) ?? false
         subscribers = (try? c.decode(String.self, forKey: .subscribers)) ?? ""
         views = (try? c.decode(String.self, forKey: .views)) ?? ""
         published = (try? c.decode(String.self, forKey: .published)) ?? ""

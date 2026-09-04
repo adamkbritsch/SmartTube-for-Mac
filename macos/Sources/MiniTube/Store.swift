@@ -306,14 +306,29 @@ final class Store: ObservableObject {
     @Published var notifications: [AppNotification] = []
 
     /// "Your channel" / "Your videos" → open the signed-in user's own channel page.
-    func openMyChannel() {
+    /// Open the signed-in user's own channel. `tabSlug` optionally selects one of its tabs once
+    /// the channel's tab list arrives — that's what makes "Your videos" land somewhere different
+    /// from "Your channel" instead of being a second label for the same page.
+    func openMyChannel(tabSlug: String? = nil) {
         Task {
             struct Me: Codable { let channelId: String }
             guard let url = URL(string: "\(base)/api/me"),
                   let (data, _) = try? await URLSession.shared.data(from: url),
                   let me = try? JSONDecoder().decode(Me.self, from: data) else { return }
             openChannel(me.channelId)
+            guard let tabSlug else { return }
+            pendingChannelTabSlug = tabSlug
         }
+    }
+
+    /// A tab to select as soon as the channel's tabs land (set by openMyChannel).
+    @Published var pendingChannelTabSlug: String?
+    /// Called by the channel view once tabs are known.
+    func applyPendingChannelTab(_ tabs: [ChannelTabInfo]) {
+        guard let want = pendingChannelTabSlug else { return }
+        pendingChannelTabSlug = nil
+        guard let t = tabs.first(where: { $0.slug.hasPrefix(want) }), !t.selected else { return }
+        openChannelTab(t)
     }
 
     /// Load the notifications inbox (bell).
@@ -1004,5 +1019,15 @@ final class Store: ObservableObject {
         var out: [String] = []
         for v in videos where seen.insert(v.channel).inserted { out.append(v.channel) }
         return out
+    }
+
+    /// channelId for a channel NAME seen in the current feed. The signed-out sidebar lists channels
+    /// by name (there's no real subscription list without an account), and those rows used to be
+    /// dead buttons because no id was passed — but the feed items they came from carry one.
+    func channelId(forName name: String) -> String? {
+        for v in videos where v.channel == name {
+            if let cid = v.channelId, !cid.isEmpty { return cid }
+        }
+        return nil
     }
 }
