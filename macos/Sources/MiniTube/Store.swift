@@ -663,12 +663,29 @@ final class Store: ObservableObject {
     }
 
     /// Load the next page (continuous scroll) — home feed or search results. De-dupes by id.
+    /// Set when a page was requested while one was already in flight. Without it that request is
+    /// simply dropped — and since a grid card's onAppear fires only once, the trigger never comes
+    /// back and scrolling silently stops loading partway down. Bounded below so a burst of
+    /// triggers can't spin.
+    private var morePending = false
+    private static let maxChainedPages = 3
+
     func loadMore() async {
-        let path = searchQuery.isEmpty ? "/api/feed/more" : "/api/search/more"
-        guard !loadingMore, let token = feedContinuation,
-              let url = URL(string: "\(base)\(path)") else { return }
+        guard !loadingMore else { morePending = true; return }   // remember it; don't drop it
         loadingMore = true
         defer { loadingMore = false }
+        var rounds = 0
+        repeat {
+            morePending = false
+            await loadOnePage()
+            rounds += 1
+        } while morePending && rounds < Self.maxChainedPages
+    }
+
+    private func loadOnePage() async {
+        let path = searchQuery.isEmpty ? "/api/feed/more" : "/api/search/more"
+        guard let token = feedContinuation,
+              let url = URL(string: "\(base)\(path)") else { return }
         // Snapshot the navigation context: a page that returns after the user
         // switched feed/search/channel must not be appended into the new grid.
         // channelTabParams included: switching channel tabs mid-fetch must not append the old

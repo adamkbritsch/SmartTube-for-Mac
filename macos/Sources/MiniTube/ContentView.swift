@@ -1481,6 +1481,14 @@ private struct FeedView: View {
 
     private static let topAnchor = "feedTop"
     static let customFeedChip = "Your custom feed"
+    /// Start the next page this many cards from the end, rather than on the very last one.
+    ///
+    /// Triggering only on the final card dead-ends: a card's onAppear fires ONCE when the lazy grid
+    /// materialises it, and loadMore() bails while a request is in flight. If the new last card
+    /// materialises before the previous load settles, that trigger is lost and — because the card
+    /// stays materialised — onAppear never fires again, so scrolling silently stops loading. A lead
+    /// means several cards can fire, so a lost one is recovered by the next.
+    static let prefetchLead = 8
     @ObservedObject private var focusEngine = FocusEngine.shared
 
     /// Tell the focus engine how many cards are on screen and how wide a row is, so Up/Down move
@@ -1630,7 +1638,7 @@ private struct FeedView: View {
                                     .buttonStyle(CardPress())
                                     .id("g\(idx)")          // == this branch's \.offset identity
                                     .onAppear {
-                                        if idx == shown.count - 1 { Task { await store.loadMore() } }
+                                        if idx >= shown.count - Self.prefetchLead { Task { await store.loadMore() } }
                                     }
                             }
                         } else {
@@ -1643,7 +1651,7 @@ private struct FeedView: View {
                                     .buttonStyle(CardPress())
                                     .id(v.id)                // == this branch's \.element.id identity
                                     .onAppear {
-                                        if v.id == shown.last?.id { Task { await store.loadMore() } }
+                                        if idx >= shown.count - Self.prefetchLead { Task { await store.loadMore() } }
                                     }
                             }
                         }
@@ -1879,12 +1887,19 @@ private struct ChannelView: View {
         } else {
             LazyVGrid(columns: Grid3.videoColumns(for: gridW), spacing: 28) {
                 // Channel uploads are unique — stable id identity.
-                ForEach(store.videos) { v in
+                // Enumerated for the index only — identity stays \.element.id, as before.
+                ForEach(Array(store.videos.enumerated()), id: \.element.id) { idx, v in
                     // openItem, not openWatch: the Playlists tab is playlists, which open a
                     // playlist page rather than a watch page.
                     Button { store.openItem(v) } label: { VideoCard(video: v) }
                         .buttonStyle(CardPress())
-                        .onAppear { if v.id == store.videos.last?.id { Task { await store.loadMore() } } }
+                        .onAppear {
+                            // Same prefetch lead as the feed: triggering on the last card alone
+                            // dead-ends scrolling partway down a channel.
+                            if idx >= store.videos.count - FeedView.prefetchLead {
+                                Task { await store.loadMore() }
+                            }
+                        }
                 }
             }
             .padding(20)
