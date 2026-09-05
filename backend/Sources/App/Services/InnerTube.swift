@@ -513,6 +513,13 @@ enum InnerTube {
         return out
     }
 
+    /// True for a metadata part that is a view/date/watching stat rather than a channel name.
+    private static func isStatText(_ t: String) -> Bool {
+        let l = t.lowercased()
+        return l.contains("view") || l.contains("watching") || l.hasSuffix("ago")
+            || l.contains("streamed") || l.contains("premiere")
+    }
+
     /// Collection lockups that open as a playlist (albums and podcasts carry playlist ids too).
     private static let playlistLockupTypes = ["PLAYLIST", "ALBUM", "PODCAST"]
 
@@ -538,7 +545,11 @@ enum InnerTube {
 
         acc[id] = FeedVideo(
             id: id, title: title,
-            channel: parts.first ?? "",
+            // parts.first is the uploader on the home feed and in search, but on a CHANNEL's own
+            // tab the uploader is implicit and the first part is metadata instead — so every card
+            // there showed "1.6M views" where the channel name goes, duplicating the line under it.
+            // Take the first part that isn't a stat.
+            channel: parts.first(where: { !isStatText($0) }) ?? "",
             channelId: channelId(in: lvm),
             channelAvatar: firstYT3URL(lvm),
             thumbnail: thumbURL,

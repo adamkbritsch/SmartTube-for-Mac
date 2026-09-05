@@ -49,12 +49,36 @@ struct ContentView: View {
     @EnvironmentObject var store: Store
     @State private var search = ""
     @State private var selectedChip = "All"
+    /// Result of an action fired from a card's 3-dot menu — a Visionary send, "Mark as watched".
+    ///
+    /// This used to live inside FeedView, so it could only ever be seen on the feed. Firing the same
+    /// menu row from a channel page, a playlist, or the watch page's up-next rail did the work and
+    /// showed NOTHING, which read as the row being dead. It belongs at the root because the menu
+    /// does.
+    @ViewBuilder private var actionNoteLayer: some View {
+        if let note = store.actionNote {
+            VStack {
+                Spacer()
+                Label(note, systemImage: store.actionNoteIsError ? "exclamationmark.triangle.fill" : "checkmark")
+                    .font(.system(size: 13))
+                    .foregroundStyle(store.actionNoteIsError ? AnyShapeStyle(Color.orange) : AnyShapeStyle(Color.primary))
+                    .padding(.horizontal, 16).padding(.vertical, 11)
+                    .background(RoundedRectangle(cornerRadius: 10).fill(Color.primary.opacity(0.12)))
+                    .background(RoundedRectangle(cornerRadius: 10).fill(themeBackground(store.settings.theme)))
+                    .padding(.bottom, 24)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+            .allowsHitTesting(false)   // a transient status must never swallow a click
+        }
+    }
+
     @State private var selectedSidebar = "Home"
     @State private var sidebarCollapsed = false
     @State private var showSettings = false
 
     var body: some View {
         ZStack {
+            actionNoteLayer.zIndex(9)   // above every page; see the property below
             VStack(spacing: 0) {
                 HeaderBar(search: $search, sidebarCollapsed: $sidebarCollapsed, showSettings: $showSettings)
                     .zIndex(2)   // the search dropdown hangs below the header, over the content
@@ -1721,17 +1745,6 @@ private struct FeedView: View {
             } else if let err = store.feedbackError {
                 Label(err, systemImage: "exclamationmark.triangle.fill")
                     .font(.system(size: 13)).foregroundStyle(.orange)
-                    .padding(.horizontal, 16).padding(.vertical, 11)
-                    .background(RoundedRectangle(cornerRadius: 10).fill(Color.primary.opacity(0.12)))
-                    .background(RoundedRectangle(cornerRadius: 10).fill(themeBackground(store.settings.theme)))
-                    .padding(.bottom, 24)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-            } else if let note = store.actionNote {
-                // Result of an action fired from a card's 3-dot menu — a Visionary send, or
-                // "Mark as watched" (the page-header buttons show theirs inline instead).
-                Label(note, systemImage: store.actionNoteIsError ? "exclamationmark.triangle.fill" : "checkmark")
-                    .font(.system(size: 13))
-                    .foregroundStyle(store.actionNoteIsError ? AnyShapeStyle(Color.orange) : AnyShapeStyle(Color.primary))
                     .padding(.horizontal, 16).padding(.vertical, 11)
                     .background(RoundedRectangle(cornerRadius: 10).fill(Color.primary.opacity(0.12)))
                     .background(RoundedRectangle(cornerRadius: 10).fill(themeBackground(store.settings.theme)))
