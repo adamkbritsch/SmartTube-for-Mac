@@ -115,6 +115,16 @@ final class FocusEngine: ObservableObject {
     /// Lets Escape leave a text field instead of navigating back.
     var blurText: (() -> Void)?
 
+    /// Where the search field and its suggestions dropdown are on screen, in the window's SwiftUI
+    /// (top-left origin) coordinate space. The app-level mouse monitor needs these to tell a click
+    /// INSIDE the search UI from one outside it: SwiftUI never drops @FocusState on an outside
+    /// click, so without this the field stayed activated no matter where you clicked.
+    var searchFieldRect: CGRect = .zero
+    var suggestionsRect: CGRect = .zero
+    func isInsideTextEntry(_ p: CGPoint) -> Bool {
+        searchFieldRect.contains(p) || suggestionsRect.contains(p)
+    }
+
 
 
     func isFocused(_ target: FocusTarget) -> Bool { keyboardActive && focused == target }

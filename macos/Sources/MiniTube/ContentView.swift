@@ -1119,12 +1119,25 @@ private struct HeaderBar: View {
             searchFocused ? Color(red: 0.24, green: 0.65, blue: 1) : Color.primary.opacity(0.12),
             lineWidth: searchFocused ? 2 : 1))
         .animation(.easeOut(duration: 0.15), value: searchFocused)
+        // Report where the capsule is so an outside click can dismiss it (see FocusEngine).
+        .background(GeometryReader { g in
+            Color.clear
+                .onAppear { FocusEngine.shared.searchFieldRect = g.frame(in: .global) }
+                .onChange(of: g.frame(in: .global)) { _, r in FocusEngine.shared.searchFieldRect = r }
+        })
         // The suggestions dropdown hangs below the capsule. It renders past the header's bounds, so
         // HeaderBar carries a zIndex in the root VStack — later siblings would otherwise draw AND
         // hit-test over it.
         .overlay(alignment: .topLeading) {
             if searchFocused, !suggestionRows.isEmpty {
-                suggestionsDropdown.offset(y: 44)
+                suggestionsDropdown
+                    .offset(y: 44)
+                    .background(GeometryReader { g in
+                        Color.clear
+                            .onAppear { FocusEngine.shared.suggestionsRect = g.frame(in: .global) }
+                            .onChange(of: g.frame(in: .global)) { _, r in FocusEngine.shared.suggestionsRect = r }
+                            .onDisappear { FocusEngine.shared.suggestionsRect = .zero }
+                    })
             }
         }
     }
@@ -1138,6 +1151,10 @@ private struct HeaderBar: View {
                     // to TYPE, not to drive the UI.
                     FocusEngine.shared.textEntry = on
                     FocusEngine.shared.blurText = { searchFocused = false }
+                    if !on {
+                        suggestions = []; highlighted = nil
+                        FocusEngine.shared.suggestionsRect = .zero
+                    }
                 }
                 .textFieldStyle(.plain)
                 .font(.system(size: 14))

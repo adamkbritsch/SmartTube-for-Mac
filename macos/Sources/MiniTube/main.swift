@@ -176,7 +176,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// app-level, not window-level, because WebKit reparents the player into its own
     /// WebCoreFullScreenWindow for YouTube fullscreen.
     private func installKeyMonitor() {
-        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp, .mouseMoved]) { event in
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp, .mouseMoved, .leftMouseDown]) { event in
             MainActor.assumeIsolated { self.handle(event) }
         }
     }
@@ -191,6 +191,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         if event.type == .mouseMoved {
             engine.mouseTookOver()      // mouse wins: put the ring away
+            return event
+        }
+
+        // Clicking outside the search field deactivates it. SwiftUI does NOT drop @FocusState on an
+        // outside click, so without this the field stayed lit and its suggestions stayed open no
+        // matter where you clicked — and because text entry suppresses the Plex key map, every
+        // single-key command stayed dead too. The event is always passed through: this only
+        // releases focus, it never eats the click that caused it.
+        if event.type == .leftMouseDown {
+            if engine.textEntry, let win = event.window ?? NSApp.keyWindow, let content = win.contentView {
+                let inContent = content.convert(event.locationInWindow, from: nil)
+                // NSHostingView is FLIPPED, so converting already lands in SwiftUI's top-left
+                // space; flipping again here put the point in the wrong half of the window
+                // (verified with a harness — the inside-click test failed both ways). Only flip
+                // for a non-flipped host.
+                let p = content.isFlipped
+                    ? inContent
+                    : CGPoint(x: inContent.x, y: content.bounds.height - inContent.y)
+                if !engine.isInsideTextEntry(p) { engine.blurText?() }
+            }
             return event
         }
 
